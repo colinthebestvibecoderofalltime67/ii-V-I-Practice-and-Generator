@@ -6,151 +6,175 @@
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="Free ii–V–I jazz lick generator with honest difficulty ratings, notation for any instrument, playback, MIDI and PDF export.">
   <title>ii–V–I Lick Studio</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231c6e78'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='700' text-anchor='middle' fill='white'%3E%E2%99%AA%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231C1C1A'/%3E%3Ctext x='16' y='22' font-family='Helvetica,Arial,sans-serif' font-size='13' font-weight='700' text-anchor='middle' fill='white'%3E251%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
 </head>
 <body>
 <a class="skip" href="#score">Skip to notation</a>
-<main>
-  <header class="top">
-    <h1>ii–V–I <span>Lick Studio</span></h1>
-    <button type="button" id="btn-library" class="ghost" aria-haspopup="dialog">
-      <span aria-hidden="true">★</span> History<span class="long"> &amp; favorites</span> <span class="count" id="lib-count" hidden></span>
+
+<header class="appbar">
+  <div class="brand"><span class="brand-name">Lick Studio</span><span class="brand-tag">ii–V–I licks, generated and graded</span></div>
+  <nav class="appnav" aria-label="Library">
+    <button type="button" id="btn-history" class="tbtn" aria-haspopup="dialog">History</button>
+    <button type="button" id="btn-saved" class="tbtn" aria-haspopup="dialog">Saved <span class="mono muted" id="lib-count">0</span></button>
+    <button type="button" id="btn-keys" class="tbtn icon" aria-haspopup="dialog" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
     </button>
-  </header>
+  </nav>
+</header>
 
-  <section class="card" aria-label="Generate a lick">
-    <div class="gen-grid">
-      <div class="field f-prog">
-        <label class="lbl" for="sel-prog">Progression</label>
-        <select id="sel-prog"></select>
-        <p class="hint" id="prog-desc"></p>
+<div class="shell">
+  <main class="main" id="main">
+    <div class="lick-head">
+      <div class="lick-title">
+        <h1 id="lick-title">Lick Studio</h1>
+        <p id="lick-meta" class="muted"></p>
       </div>
-      <div class="field f-inst">
-        <label class="lbl" for="sel-inst">Instrument</label>
-        <select id="sel-inst"></select>
-      </div>
-      <div class="field f-key">
-        <label class="lbl" for="sel-key">Key (concert)</label>
-        <div class="keyrow">
-          <button type="button" id="key-dn" class="sq" title="Down a semitone" aria-label="Transpose down a semitone">−½</button>
-          <select id="sel-key"></select>
-          <button type="button" id="key-up" class="sq" title="Up a semitone" aria-label="Transpose up a semitone">+½</button>
+      <div class="lick-actions">
+        <button type="button" id="t-fav" class="btn" aria-pressed="false">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path id="fav-star" d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>
+          <span id="fav-label">Save</span>
+        </button>
+        <div class="menu">
+          <button type="button" id="btn-export" class="tbtn" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu">
+            Export
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="menu-pop" id="export-menu" role="menu" hidden>
+            <button type="button" role="menuitem" id="btn-midi">Download MIDI</button>
+            <button type="button" role="menuitem" id="btn-pdf">Download PDF</button>
+          </div>
         </div>
       </div>
-      <div class="field f-tier">
-        <span class="lbl" id="lbl-tier">Difficulty</span>
-        <div class="pills" id="pills-tier" role="group" aria-labelledby="lbl-tier"></div>
-        <p class="hint warn" id="tier-hint" hidden></p>
-      </div>
-      <div class="field f-len">
-        <span class="lbl" id="lbl-len">Length</span>
-        <div class="seg" id="seg-len" role="group" aria-labelledby="lbl-len"></div>
-      </div>
     </div>
-    <button type="button" id="btn-gen" class="primary gen">Generate lick →</button>
-  </section>
+    <p class="export-status muted" id="export-status" role="status"></p>
 
-  <section class="paper-wrap" aria-label="Notation">
-    <div class="paper" id="paper">
+    <figure class="paper" id="paper">
       <div id="score" tabindex="-1"></div>
-      <div class="cover" id="cover" aria-hidden="true">Now play it from memory!</div>
-    </div>
-  </section>
+      <div class="cover" id="cover" aria-hidden="true">Now play it from memory.</div>
+    </figure>
 
-  <section class="meta" aria-label="About this lick" aria-live="polite">
-    <div class="meta-top">
-      <span class="badge" id="tier-badge"></span>
-      <span class="info" id="info"></span>
-      <span class="status" id="status" role="status">Ready</span>
-    </div>
-    <p class="note" id="tier-note" hidden></p>
-    <div class="why" id="why" hidden>
-      <span class="lbl">Why it’s rated this way</span>
-      <span class="chips" id="chips"></span>
-    </div>
-  </section>
+    <section class="playback" aria-label="Playback">
+      <div class="pb-main">
+        <button type="button" id="btn-play" class="btn primary">
+          <svg id="play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>
+          <span id="play-label">Play</span>
+        </button>
+        <button type="button" id="btn-stop" class="btn square" aria-label="Stop">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1.5"/></svg>
+        </button>
+        <span class="mono pos" id="status" role="status">Ready</span>
+      </div>
+      <label class="tempo">Tempo
+        <input type="range" id="r-bpm" min="40" max="320" step="1">
+        <span class="mono" id="bpm-val">120</span>
+      </label>
+      <div class="pb-checks">
+        <label class="check"><input type="checkbox" id="c-swing"> Swing</label>
+        <label class="check"><input type="checkbox" id="c-piano"> Backing</label>
+        <label class="check"><input type="checkbox" id="c-loop"> Loop</label>
+        <label class="check"><input type="checkbox" id="c-hide"> Hide notes</label>
+        <label class="check" id="tab-wrap" hidden><input type="checkbox" id="c-tab"> Show tab</label>
+        <button type="button" id="btn-sound" class="tbtn quiet" aria-haspopup="dialog">Sound settings</button>
+      </div>
+    </section>
 
-  <section class="card transport" aria-label="Playback">
-    <div class="row">
-      <button type="button" id="btn-play" class="primary big">▶ Play</button>
-      <button type="button" id="btn-stop" class="big-sec">■ Stop</button>
-      <span class="sep" aria-hidden="true"></span>
-      <button type="button" class="toggle" id="t-piano" aria-pressed="true">Piano</button>
-      <button type="button" class="toggle" id="t-loop" aria-pressed="false">Loop</button>
-      <button type="button" class="toggle" id="t-swing" aria-pressed="true">Swing</button>
-      <button type="button" class="toggle" id="t-hide" aria-pressed="false">Hide notation</button>
-      <button type="button" class="toggle" id="t-tab" aria-pressed="true" hidden>Show tab</button>
-      <button type="button" class="toggle fav" id="t-fav" aria-pressed="false"><span aria-hidden="true" id="fav-star">☆</span> Favorite</button>
-    </div>
-  </section>
+    <section class="difficulty" aria-labelledby="diff-h">
+      <div class="diff-summary">
+        <h2 id="diff-h" class="label">Difficulty</h2>
+        <div class="diff-top"><span id="tier-name" class="tier-name"></span><span id="tier-score" class="mono muted-2"></span></div>
+        <div class="scale" aria-hidden="true">
+          <div class="scale-track"><div class="scale-fill" id="scale-fill"></div><div class="scale-mark" id="scale-mark"></div>
+            <span class="tick" style="left:7%"></span><span class="tick" style="left:15%"></span><span class="tick" style="left:44%"></span></div>
+          <div class="scale-labels mono"><span style="left:0">Beg</span><span style="left:7.5%">Int</span><span style="left:15.5%">Adv</span><span style="left:44.5%">Expert</span></div>
+        </div>
+        <p class="small muted-2">Scored from the notes themselves. Tempo isn’t counted, so slow it down as much as you need.</p>
+      </div>
+      <table class="feat">
+        <caption class="label" id="feat-cap">What makes it this hard</caption>
+        <tbody id="feat-rows"></tbody>
+      </table>
+    </section>
+  </main>
 
-  <details class="card settings" id="settings">
-    <summary>⚙ Settings</summary>
-    <div class="set-grid">
+  <aside class="side" aria-labelledby="side-h">
+    <h2 id="side-h" class="side-h">Next lick</h2>
+    <fieldset class="group">
+      <legend class="label">Progression</legend>
+      <div id="prog-list" class="radio-list"></div>
+      <p class="small muted" id="prog-desc"></p>
+    </fieldset>
+    <fieldset class="group">
+      <legend class="label">Difficulty</legend>
+      <div id="tier-list" class="radio-list tiers"></div>
+      <p class="small warn" id="tier-hint" hidden></p>
+    </fieldset>
+    <div class="group fields">
+      <label class="field"><span class="label">Instrument</span><select id="sel-inst"></select></label>
       <div class="field">
-        <label class="lbl" for="r-bpm">Tempo · <span id="bpm-val"></span></label>
+        <label class="label" for="sel-key">Key</label>
         <div class="keyrow">
-          <button type="button" id="bpm-dn" class="sq" aria-label="Slower by 5 BPM">−5</button>
-          <input type="range" id="r-bpm" min="40" max="320" step="1">
-          <button type="button" id="bpm-up" class="sq" aria-label="Faster by 5 BPM">+5</button>
+          <button type="button" id="key-dn" class="btn square mono" aria-label="Key down a semitone">−</button>
+          <select id="sel-key"></select>
+          <button type="button" id="key-up" class="btn square mono" aria-label="Key up a semitone">+</button>
         </div>
       </div>
-      <div class="field">
-        <span class="lbl">Speed</span>
-        <button type="button" class="toggle" id="t-slow" aria-pressed="false">Slow practice (60%)</button>
-      </div>
-      <div class="field">
-        <label class="lbl" for="sel-comp">Piano comping</label>
-        <select id="sel-comp">
-          <option value="rootless">Rootless voicings</option>
-          <option value="block">Block chords</option>
-          <option value="sparse">Sparse (beat 1)</option>
-        </select>
-      </div>
-      <div class="field">
-        <label class="lbl" for="r-lead">Lead volume</label>
-        <input type="range" id="r-lead" min="0" max="1" step="0.05">
-      </div>
-      <div class="field">
-        <label class="lbl" for="r-piano">Backing volume</label>
-        <input type="range" id="r-piano" min="0" max="1" step="0.05">
-      </div>
-      <div class="field">
-        <span class="lbl">Playback</span>
-        <div class="checks">
-          <label class="check"><input type="checkbox" id="c-count"> Count-in</label>
-          <label class="check"><input type="checkbox" id="c-met"> Metronome</label>
-          <label class="check"><input type="checkbox" id="c-midi"> Include backing in MIDI export</label>
-        </div>
-      </div>
+      <fieldset class="field">
+        <legend class="label">Length</legend>
+        <div id="len-list" class="radio-row"></div>
+      </fieldset>
     </div>
-  </details>
+    <button type="button" id="btn-gen" class="btn ink gen">Generate lick <kbd class="mono">G</kbd></button>
+  </aside>
+</div>
 
-  <section class="card export" aria-label="Export">
-    <div class="row">
-      <span class="lbl inline">Take it with you</span>
-      <button type="button" id="btn-midi">⬇ Download MIDI</button>
-      <button type="button" id="btn-pdf">⬇ Download PDF</button>
-      <span class="status" id="export-status" role="status"></span>
+<footer class="foot">
+  <p>Every lick is generated from original melodic cells; difficulty is computed from the notes. Notation by VexFlow, sound synthesized in your browser.</p>
+</footer>
+
+<dialog id="sound" class="sheet" aria-labelledby="sound-title">
+  <div class="sheet-head"><h2 id="sound-title">Sound settings</h2><button type="button" class="tbtn icon" data-close aria-label="Close">✕</button></div>
+  <div class="sheet-body">
+    <label class="field"><span class="label">Piano comping</span>
+      <select id="sel-comp">
+        <option value="rootless">Rootless voicings</option>
+        <option value="block">Block chords</option>
+        <option value="sparse">Sparse (beat 1)</option>
+      </select>
+    </label>
+    <label class="field"><span class="label">Lead volume</span><input type="range" id="r-lead" min="0" max="1" step="0.05"></label>
+    <label class="field"><span class="label">Backing volume</span><input type="range" id="r-piano" min="0" max="1" step="0.05"></label>
+    <div class="field">
+      <span class="label">Practice</span>
+      <label class="check"><input type="checkbox" id="c-slow"> Slow practice (60% of tempo)</label>
+      <label class="check"><input type="checkbox" id="c-count"> Count-in</label>
+      <label class="check"><input type="checkbox" id="c-met"> Metronome</label>
+      <label class="check"><input type="checkbox" id="c-midi"> Include backing in MIDI export</label>
     </div>
-  </section>
+  </div>
+</dialog>
 
-  <footer>
-    <p>Every lick is generated from original melodic cells; difficulty is computed from the notes. Notation by VexFlow, sound synthesized in your browser.</p>
-    <p class="kbd">Shortcuts: <kbd>Space</kbd> play / pause · <kbd>G</kbd> generate</p>
-  </footer>
-</main>
+<dialog id="keys" class="sheet small-sheet" aria-labelledby="keys-title">
+  <div class="sheet-head"><h2 id="keys-title">Keyboard shortcuts</h2><button type="button" class="tbtn icon" data-close aria-label="Close">✕</button></div>
+  <dl class="keys">
+    <dt><kbd class="mono">Space</kbd></dt><dd>Play / pause</dd>
+    <dt><kbd class="mono">G</kbd></dt><dd>Generate a new lick</dd>
+    <dt><kbd class="mono">Esc</kbd></dt><dd>Close a panel or menu</dd>
+  </dl>
+</dialog>
 
-<dialog id="library" aria-labelledby="lib-title">
-  <div class="lib-head">
+<dialog id="library" class="sheet" aria-labelledby="lib-title">
+  <div class="sheet-head">
     <h2 id="lib-title">Your licks</h2>
-    <button type="button" id="lib-close" class="ghost" aria-label="Close">✕</button>
+    <button type="button" id="lib-close" class="tbtn icon" aria-label="Close">✕</button>
   </div>
   <div class="tabs" role="tablist" aria-label="Library">
     <button type="button" role="tab" id="tab-history" aria-selected="true" aria-controls="lib-list">History</button>
-    <button type="button" role="tab" id="tab-favs" aria-selected="false" aria-controls="lib-list" tabindex="-1">Favorites</button>
+    <button type="button" role="tab" id="tab-favs" aria-selected="false" aria-controls="lib-list" tabindex="-1">Saved</button>
   </div>
-  <div class="lib-tools"><span id="lib-sub" class="hint"></span><button type="button" id="lib-clear" class="ghost small">Clear history</button></div>
+  <div class="lib-tools"><span id="lib-sub" class="small muted"></span><button type="button" id="lib-clear" class="tbtn quiet">Clear history</button></div>
   <ul id="lib-list" role="tabpanel" class="lib-list"></ul>
 </dialog>
 

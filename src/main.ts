@@ -5,6 +5,7 @@ import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
 import { INSTRUMENTS, concertRange, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
 import { renderLick } from './render/notation';
+import { lickFingerings } from './render/tab';
 import { Player, type PlayOptions } from './audio/player';
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
@@ -94,6 +95,10 @@ function syncControls(): void {
   const tabBtn = $('t-tab');
   tabBtn.hidden = !i.tab;
   setPressed(tabBtn, settings.showTab);
+  const fingBtn = $('t-fingers');
+  fingBtn.hidden = !i.tab || !settings.showTab;
+  setPressed(fingBtn, settings.showFingers);
+  syncPositions();
   $('t-hide').textContent = settings.hide ? 'Show notation' : 'Hide notation';
   $<HTMLInputElement>('r-bpm').value = String(settings.bpm);
   $('bpm-val').textContent = `${effectiveBpm()} BPM${settings.slow ? ' (slow)' : ''}`;
@@ -112,11 +117,51 @@ function syncControls(): void {
   updateFav();
 }
 
+/* ---------------------------------------------------------------- tab positions */
+
+/** Playable positions of the current lick on the current instrument (empty for non-tab instruments). */
+function tabPositions(): string[] {
+  if (!lick || !inst().tab) return [];
+  return lickFingerings(lick, inst())?.positions.map(p => p.label) ?? [];
+}
+
+/** Fill the Position select; fall back to Auto when the saved position is not playable for this lick. */
+function syncPositions(): void {
+  const field = $('f-pos');
+  const show = !!inst().tab && settings.showTab;
+  field.hidden = !show;
+  field.parentElement?.classList.toggle('has-pos', show);
+  const labels = tabPositions();
+  if (lick && settings.tabPosition !== 'auto' && !labels.includes(settings.tabPosition)) {
+    settings.tabPosition = 'auto';
+    persist();
+  }
+  const sel = $<HTMLSelectElement>('sel-pos');
+  const fing = lick && inst().tab ? lickFingerings(lick, inst()) : null;
+  const html = ['<option value="auto">Auto (easiest)</option>'];
+  fing?.positions.forEach(p => {
+    const w = p.window[0] === p.window[1] ? `fret ${p.window[0]}` : `frets ${p.window[0]}–${p.window[1]}`;
+    const sh = p.shifts ? ` · ${p.shifts} shift${p.shifts > 1 ? 's' : ''}` : '';
+    html.push(`<option value="${p.label}">${p.label} (${w}${sh})</option>`);
+  });
+  const next = html.join('');
+  if (sel.innerHTML !== next) sel.innerHTML = next;
+  sel.value = settings.tabPosition;
+}
+
+function tabIndex(): 'auto' | number {
+  if (settings.tabPosition === 'auto') return 'auto';
+  const i = tabPositions().indexOf(settings.tabPosition);
+  return i < 0 ? 'auto' : i;
+}
+
 /* ---------------------------------------------------------------- display */
 
 function renderNotation(): void {
   if (!lick) return;
-  renderLick($('score'), lick, inst(), { highlight, showTab: settings.showTab && !!inst().tab });
+  renderLick($('score'), lick, inst(), {
+    highlight, showTab: settings.showTab && !!inst().tab, tabPosition: tabIndex(), showFingers: settings.showFingers,
+  });
 }
 
 function setStatus(s: string): void {
@@ -186,6 +231,7 @@ function showLick(l: Lick, record: boolean, replaceId?: string): void {
     history = store.addHistory(l);
   }
   renderMeta();
+  syncPositions();
   renderNotation();
   updateTransport();
   updateFav();
@@ -279,7 +325,7 @@ async function doPdf(): Promise<void> {
   out.textContent = 'Building PDF…';
   try {
     const { exportPdf } = await import('./export/pdf');
-    await exportPdf(lick, inst());
+    await exportPdf(lick, inst(), { tabPosition: tabIndex(), showFingers: settings.showFingers });
     out.textContent = 'PDF saved.';
   } catch (err) {
     out.textContent = 'Could not create the PDF: ' + String((err as Error)?.message ?? err);
@@ -348,6 +394,11 @@ function bind(): void {
   $('t-swing').addEventListener('click', () => { setting('swing', !settings.swing); restartIfPlaying(); });
   $('t-hide').addEventListener('click', () => { setting('hide', !settings.hide); if (!settings.hide) renderNotation(); });
   $('t-tab').addEventListener('click', () => { setting('showTab', !settings.showTab); renderNotation(); });
+  $('t-fingers').addEventListener('click', () => { setting('showFingers', !settings.showFingers); renderNotation(); });
+  $<HTMLSelectElement>('sel-pos').addEventListener('change', e => {
+    setting('tabPosition', (e.target as HTMLSelectElement).value);
+    renderNotation();
+  });
   $('t-fav').addEventListener('click', () => {
     if (!lick) return;
     favorites = favorites.some(f => f.lick.id === lick!.id) ? store.removeFavorite(lick.id) : store.addFavorite(lick);

@@ -91,3 +91,14 @@ describe('storage', () => {
     expect(() => new Store(null).addFavorite(mk(2))).not.toThrow();
   });
 });
+
+describe('tab settings', () => {
+  it('validates tabPosition and showFingers, falling back to defaults', () => {
+    expect(DEFAULT_SETTINGS.tabPosition).toBe('auto');
+    expect(DEFAULT_SETTINGS.showFingers).toBe(false);
+    expect(sanitizeSettings({ tabPosition: 'Pos. VII', showFingers: true })).toMatchObject({ tabPosition: 'Pos. VII', showFingers: true });
+    expect(sanitizeSettings({ tabPosition: 'Open pos.' }).tabPosition).toBe('Open pos.');
+    for (const bad of ['Pos. 7', '<b>', 3, null, 'auto ']) expect(sanitizeSettings({ tabPosition: bad }).tabPosition).toBe('auto');
+    expect(sanitizeSettings({ showFingers: 'yes' }).showFingers).toBe(false);
+  });
+});

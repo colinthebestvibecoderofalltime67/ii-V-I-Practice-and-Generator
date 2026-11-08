@@ -37,6 +37,10 @@
           <button type="button" id="key-up" class="sq" title="Up a semitone" aria-label="Transpose up a semitone">+½</button>
         </div>
       </div>
+      <div class="field f-pos" id="f-pos" hidden>
+        <label class="lbl" for="sel-pos">Position</label>
+        <select id="sel-pos"></select>
+      </div>
       <div class="field f-tier">
         <span class="lbl" id="lbl-tier">Difficulty</span>
         <div class="pills" id="pills-tier" role="group" aria-labelledby="lbl-tier"></div>
@@ -80,6 +84,7 @@
       <button type="button" class="toggle" id="t-swing" aria-pressed="true">Swing</button>
       <button type="button" class="toggle" id="t-hide" aria-pressed="false">Hide notation</button>
       <button type="button" class="toggle" id="t-tab" aria-pressed="true" hidden>Show tab</button>
+      <button type="button" class="toggle" id="t-fingers" aria-pressed="false" hidden>Finger numbers</button>
       <button type="button" class="toggle fav" id="t-fav" aria-pressed="false"><span aria-hidden="true" id="fav-star">☆</span> Favorite</button>
     </div>
   </section>

@@ -141,6 +141,8 @@ export interface Lick {
   notes: LickNote[];
   totalTicks: number;
   fragmentIds: string[];
+  /** Tick where each melodic cell (fragment) starts, parallel to fragmentIds. Optional: older saved licks lack it. */
+  cellStarts?: number[];
   difficulty: DifficultyResult;
   createdAt: number;
 }

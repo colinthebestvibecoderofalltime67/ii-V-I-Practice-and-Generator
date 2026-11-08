@@ -38,11 +38,16 @@ export const TIER_THRESHOLDS: [number, number, number];          // score cut-of
 
 ### Notation: `src/render/` (browser)
 ```ts
-export interface RenderOptions { highlight?: number[]; showTab?: boolean; print?: boolean }
+export interface RenderOptions { highlight?: number[]; showTab?: boolean; print?: boolean;
+  tabPosition?: 'auto' | number; showFingers?: boolean }   // index into lickFingerings(...).positions
 export function renderLick(container: HTMLElement, lick: Lick, inst: Instrument, opts?: RenderOptions): SVGSVGElement | null;
 // src/render/tab.ts (pure)
 export function assignFrets(written: (number | null)[], tuning: number[], frets: number): ({ str: number; fret: number } | null)[];
+export function fingerLine(line: LineInput, tuning: number[], frets: number, opts?: FingerOptions): Fingering;  // + finger, hand position, shifts
+export function positionsForLick(line: LineInput, tuning: number[], frets: number, cellStarts?: number[]): Fingering[];
+export function lickFingerings(lick: Lick, inst: Instrument): { line; auto: Fingering; positions: Fingering[] } | null;  // memoised
 ```
+The fingering model and its sources are in [GUITAR_TAB.md](GUITAR_TAB.md). Generated licks carry an optional `cellStarts` (tick of each fragment), which makes shifting at cell joins cheap; older saved licks without it still work.
 `highlight` holds indices into `lick.notes`. `str` is 1-based with string 1 being the highest, the VexFlow convention.
 
 ### Audio: `src/audio/`

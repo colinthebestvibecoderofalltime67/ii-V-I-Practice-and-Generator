@@ -44,11 +44,17 @@ export interface RenderOptions {
   chordFont?: { family: string; weight?: string }; // chord-symbol font (default Georgia bold)
   romans?: string[];                             // one roman numeral per lick.chords entry, drawn after each symbol
   activeBar?: number; activeBarColor?: string;   // faint tint behind the bar being played (ignored in print)
+  tabPosition?: 'auto' | number;                 // tab fingering: index into lickFingerings(...).positions
+  showFingers?: boolean;                         // finger numbers on every tab note (else only at shifts)
 }
 export function renderLick(container: HTMLElement, lick: Lick, inst: Instrument, opts?: RenderOptions): SVGSVGElement | null;
 // src/render/tab.ts (pure)
 export function assignFrets(written: (number | null)[], tuning: number[], frets: number): ({ str: number; fret: number } | null)[];
+export function fingerLine(line: LineInput, tuning: number[], frets: number, opts?: FingerOptions): Fingering;  // + finger, hand position, shifts
+export function positionsForLick(line: LineInput, tuning: number[], frets: number, cellStarts?: number[]): Fingering[];
+export function lickFingerings(lick: Lick, inst: Instrument): { line; auto: Fingering; positions: Fingering[] } | null;  // memoised
 ```
+The fingering model and its sources are in [GUITAR_TAB.md](GUITAR_TAB.md). Generated licks carry an optional `cellStarts` (tick of each fragment), which makes shifting at cell joins cheap; older saved licks without it still work.
 `highlight` holds indices into `lick.notes`. `str` is 1-based with string 1 being the highest, the VexFlow convention.
 
 ### Audio: `src/audio/`

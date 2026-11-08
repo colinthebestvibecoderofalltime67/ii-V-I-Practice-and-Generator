@@ -1,6 +1,6 @@
 import type { Instrument, Lick } from '../types';
 import { TIER_NAMES } from '../types';
-import { renderLick } from '../render/notation';
+import { type RenderOptions, renderLick } from '../render/notation';
 import { downloadBlob, fileName, isTransposing, keyLabel, progressionName, writtenKeyLabel } from '../ui/format';
 
 const RENDER_WIDTH = 720;
@@ -8,7 +8,9 @@ const RENDER_WIDTH = 720;
 const plain = (s: string): string => s.replace(/♭/g, 'b').replace(/♯/g, '#');
 
 /** Render the lick to an A4 portrait PDF and trigger a download. jsPDF and svg2pdf load on demand. */
-export async function exportPdf(lick: Lick, inst: Instrument): Promise<void> {
+export async function exportPdf(
+  lick: Lick, inst: Instrument, tabOpts: Pick<RenderOptions, 'tabPosition' | 'showFingers'> = {},
+): Promise<void> {
   const [{ jsPDF }, svg2pdfMod] = await Promise.all([import('jspdf'), import('svg2pdf.js')]);
   const svg2pdf = svg2pdfMod.svg2pdf;
 
@@ -16,7 +18,7 @@ export async function exportPdf(lick: Lick, inst: Instrument): Promise<void> {
   holder.style.cssText = `position:absolute;left:-10000px;top:0;width:${RENDER_WIDTH}px;background:#fff;`;
   document.body.appendChild(holder);
   try {
-    const svg = renderLick(holder, lick, inst, { print: true, showTab: !!inst.tab });
+    const svg = renderLick(holder, lick, inst, { print: true, showTab: !!inst.tab, ...tabOpts });
     if (!svg) throw new Error('Could not render notation for the PDF.');
     // svg2pdf reads font sizes in pt as 0; give text plain unitless pixel sizes.
     for (const el of [svg, ...Array.from(svg.querySelectorAll('[font-size]'))]) {

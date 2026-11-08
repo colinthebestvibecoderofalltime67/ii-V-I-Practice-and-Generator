@@ -24,6 +24,10 @@ export interface Settings {
   countIn: boolean;
   metronome: boolean;
   midiBacking: boolean;
+  /** Tab fingering: 'auto' (easiest) or a position label such as "Pos. V" / "Open pos.". */
+  tabPosition: 'auto' | string;
+  /** Show finger numbers on every tab note. */
+  showFingers: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -45,7 +49,12 @@ export const DEFAULT_SETTINGS: Settings = {
   countIn: false,
   metronome: false,
   midiBacking: true,
+  tabPosition: 'auto',
+  showFingers: false,
 };
+
+/** Labels that positionsForLick can produce. */
+export const TAB_POSITION_RE = /^(Open pos\.|Pos\. [IVX]{1,6})$/;
 
 export interface StoredEntry { lick: Lick; at: number }
 
@@ -73,6 +82,7 @@ export function isValidLick(v: unknown): v is Lick {
   if (![1, 2, 3, 4].includes(v.requestedTier as number)) return false;
   if (!Array.isArray(v.chords) || v.chords.length === 0 || !Array.isArray(v.notes) || v.notes.length === 0) return false;
   if (!Array.isArray(v.fragmentIds) || !isNum(v.createdAt)) return false;
+  if (v.cellStarts !== undefined && !(Array.isArray(v.cellStarts) && v.cellStarts.every(isNum))) return false;
   for (const c of v.chords) {
     if (!isObj(c) || !isNum(c.rootPc) || typeof c.quality !== 'string' || typeof c.symbol !== 'string' || !isNum(c.start) || !isNum(c.dur)) return false;
   }
@@ -101,7 +111,8 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (isNum(raw.leadVolume)) s.leadVolume = clamp(raw.leadVolume, 0, 1);
   if (isNum(raw.pianoVolume)) s.pianoVolume = clamp(raw.pianoVolume, 0, 1);
   if (raw.comp === 'rootless' || raw.comp === 'block' || raw.comp === 'sparse') s.comp = raw.comp;
-  for (const k of ['slow', 'piano', 'loop', 'swing', 'hide', 'showTab', 'countIn', 'metronome', 'midiBacking'] as const) {
+  if (typeof raw.tabPosition === 'string' && (raw.tabPosition === 'auto' || TAB_POSITION_RE.test(raw.tabPosition))) s.tabPosition = raw.tabPosition;
+  for (const k of ['slow', 'piano', 'loop', 'swing', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking'] as const) {
     if (isBool(raw[k])) s[k] = raw[k];
   }
   return s;

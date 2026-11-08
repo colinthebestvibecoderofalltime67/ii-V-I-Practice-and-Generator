@@ -6,12 +6,16 @@ import type { Instrument, Lick } from '../types';
 import { RENDERABLE_DURS } from '../types';
 import { CHORDS } from '../theory/chords';
 import { chordRootName, keySignatureName, keyUsesSharps, mod12, vexKey } from '../theory/pitch';
-import { assignFrets } from './tab';
+import { type FingeredNote, lickFingerings, pickFingering, roman } from './tab';
 
 export interface RenderOptions {
   highlight?: number[];
   showTab?: boolean;
   print?: boolean;
+  /** Tab fingering: 'auto' (easiest) or an index into positionsForLick / lickFingerings().positions. */
+  tabPosition?: 'auto' | number;
+  /** Show a suggested finger above every fretted tab note (otherwise only where the hand shifts). */
+  showFingers?: boolean;
   /** Colour for highlighted (now-playing) notes. Default: burnt orange. */
   highlightColor?: string;
   /** Chord-symbol font. Default: Georgia bold. */
@@ -133,7 +137,7 @@ function makeNote(p: Piece, clef: 'treble' | 'bass', sharps: boolean): StaveNote
   return n;
 }
 
-function makeTabNote(p: Piece, pos: { str: number; fret: number } | null): TabNote | GhostNote {
+function makeTabNote(p: Piece, pos: FingeredNote | null): TabNote | GhostNote {
   const [d, dots] = DUR_NAME[p.dur] ?? ['q', 0];
   if (p.midi == null || p.cont || !pos) {
     const g = new GhostNote({ duration: d + 'd'.repeat(dots) });
@@ -187,16 +191,40 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   // ---------- phase 1: notes, voices, minimum widths ----------
   const pieceBars = buildPieces(lick, inst.transpose, nBars);
   const flatPieces = pieceBars.flat();
+  let firstLabel = '';
+  let firstPos = -1;
   const tabPos = showTab && tab
     ? (() => {
-        // assign frets over the first piece of each tied chain only
-        const idx = flatPieces.map((p, i) => ({ p, i })).filter(x => x.p.midi != null && !x.p.cont);
-        const res = assignFrets(idx.map(x => x.p.midi), tab.tuning, tab.frets);
-        const m = new Map<number, { str: number; fret: number } | null>();
-        idx.forEach((x, k) => m.set(x.i, res[k]));
+        // fingering is computed per tied chain (lickLine); the first piece of each chain carries it
+        const fing = lickFingerings(lick, inst);
+        const m = new Map<number, FingeredNote | null>();
+        if (!fing) return m;
+        const chosen = pickFingering(fing, opts.tabPosition);
+        firstLabel = chosen.label;
+        firstPos = chosen.position;
+        const byStart = new Map<number, FingeredNote>();
+        fing.line.forEach((n, i) => { const f = chosen.notes[i]; if (f && n.midi != null) byStart.set(n.start!, f); });
+        flatPieces.forEach((p, i) => { if (p.midi != null && !p.cont) m.set(i, byStart.get(p.start) ?? null); });
         return m;
       })()
     : null;
+  // where to print a position label / finger number above the tab
+  const tabMarks = new Map<number, { label?: string; finger?: number }>();
+  if (tabPos) {
+    let first = true;
+    for (const [i, f] of [...tabPos].sort((a, b) => a[0] - b[0])) {
+      if (!f || f.fret === 0) continue;
+      const mark: { label?: string; finger?: number } = {};
+      if (first || f.shift) {
+        // name the opening position as the position menu does ("Open pos.", "Pos. V")
+        mark.label = first && (f.pos === firstPos || (firstLabel === 'Open pos.' && f.pos <= 1)) ? firstLabel : `Pos. ${roman(f.pos)}`;
+        mark.finger = f.finger;
+      }
+      if (opts.showFingers) mark.finger = f.finger;
+      if (mark.label || mark.finger) tabMarks.set(i, mark);
+      first = false;
+    }
+  }
 
   let pi = 0;
   const bars: Bar[] = pieceBars.map((pcs, b) => {
@@ -316,7 +344,9 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const tabSpacing = 13;
   const tabLines = tab ? tab.tuning.length : 0;
   const tabH = showTab ? (tabLines - 1) * tabSpacing : 0;
-  const sysH = topLineOff + staffH + belowStaff + (showTab ? 6 + tabH + 24 : 0);
+  const TAB_ANNOT = 24; // room above the tab for position labels and finger numbers
+  const tabGap = 6 + (showTab ? TAB_ANNOT : 0);
+  const sysH = topLineOff + staffH + belowStaff + (showTab ? tabGap + tabH + 24 : 0);
   const totalH = Math.ceil(MARGIN + systems.length * sysH + 6);
 
   // ---------- phase 2: draw ----------
@@ -331,6 +361,35 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
     ctx.setFillStyle('#000');
     ctx.setStrokeStyle('#000');
   }
+
+  const MARK_FONT = 'Arial, Helvetica, sans-serif';
+  const markColor = print ? '#000' : '#6E6D67';
+  let lastLabelRight = -Infinity;
+  let lastLabelSys = -1;
+  const drawTabMarks = (B: Bar, base: number, tabTop: number): void => {
+    ctx.save();
+    ctx.setFillStyle(markColor);
+    B.tabNotes.forEach((tn, k) => {
+      const mark = tabMarks.get(base + k);
+      if (!mark || !(tn instanceof TabNote)) return;
+      const x = tn.getAbsoluteX() + tn.getGlyphWidth() / 2;
+      if (mark.finger) {
+        ctx.setFont(MARK_FONT, 10, 'normal');
+        const t = String(mark.finger);
+        ctx.fillText(t, x - ctx.measureText(t).width / 2, tabTop - 8);
+      }
+      if (mark.label) {
+        ctx.setFont(MARK_FONT, 10, 'bold');
+        const w = ctx.measureText(mark.label).width;
+        const sys = Math.round(tabTop);
+        const lx = Math.max(x - 4, sys === lastLabelSys ? lastLabelRight + 4 : -Infinity);
+        ctx.fillText(mark.label, lx, tabTop - 19);
+        lastLabelRight = lx + w;
+        lastLabelSys = sys;
+      }
+    });
+    ctx.restore();
+  };
 
   const pieceBase: number[] = [];
   {
@@ -378,7 +437,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
       let tst: TabStave | null = null;
       if (showTab) {
         tst = new TabStave(x, 0, w, { num_lines: tabLines, spacing_between_lines_px: tabSpacing });
-        const desiredTop = topLineY + staffH + belowStaff + 6;
+        const desiredTop = topLineY + staffH + belowStaff + tabGap;
         tst.setY(desiredTop - tst.getYForLine(0));
         if (k === 0) tst.addClef('tab');
         if (b === bars.length - 1) tst.setEndBarType(Barline.type.END);
@@ -403,7 +462,10 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
         }
         bm.setContext(ctx).draw();
       });
-      if (B.tabVoice && tst) B.tabVoice.draw(ctx, tst);
+      if (B.tabVoice && tst) {
+        B.tabVoice.draw(ctx, tst);
+        drawTabMarks(B, pieceBase[b], tst.getYForLine(0));
+      }
       B.notes.forEach((n, i) => drawnNotes.set(pieceBase[b] + i, n));
       B.tabNotes.forEach((n, i) => drawnTab.set(pieceBase[b] + i, n));
 

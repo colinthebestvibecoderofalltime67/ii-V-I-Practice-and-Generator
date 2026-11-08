@@ -6,6 +6,7 @@ import { INSTRUMENTS, concertRange, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
 import { FEATURE_MAX } from './difficulty/score';
 import { renderLick } from './render/notation';
+import { lickFingerings } from './render/tab';
 import { Player, type PlayOptions } from './audio/player';
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
@@ -114,6 +115,9 @@ function syncControls(): void {
   check('c-hide', settings.hide);
   $('tab-wrap').hidden = !i.tab;
   check('c-tab', settings.showTab);
+  $('fingers-wrap').hidden = !i.tab || !settings.showTab;
+  check('c-fingers', settings.showFingers);
+  syncPositions();
   check('c-slow', settings.slow);
   check('c-count', settings.countIn);
   check('c-met', settings.metronome);
@@ -132,6 +136,36 @@ function syncControls(): void {
   updateFav();
 }
 
+/* ---------------------------------------------------------------- tab positions */
+
+/** Fill the Position select from the current lick; fall back to Auto when the saved position is not playable. */
+function syncPositions(): void {
+  const i = inst();
+  const fing = lick && i.tab ? lickFingerings(lick, i) : null;
+  $('pos-wrap').hidden = !i.tab || !settings.showTab;
+  if (fing && settings.tabPosition !== 'auto' && !fing.positions.some(p => p.label === settings.tabPosition)) {
+    settings.tabPosition = 'auto';
+    persist();
+  }
+  const sel = $<HTMLSelectElement>('sel-pos');
+  const opts = [new Option('Auto (easiest)', 'auto')];
+  for (const p of fing?.positions ?? []) {
+    const frets = p.window[0] === p.window[1] ? `fret ${p.window[0]}` : `frets ${p.window[0]}–${p.window[1]}`;
+    const shifts = p.shifts ? `, ${p.shifts} shift${p.shifts > 1 ? 's' : ''}` : '';
+    opts.push(new Option(`${p.label} (${frets}${shifts})`, p.label));
+  }
+  const sig = opts.map(o => o.value + o.text).join('|');
+  if (sel.dataset.sig !== sig) { sel.replaceChildren(...opts); sel.dataset.sig = sig; }
+  sel.value = settings.tabPosition;
+}
+
+/** RenderOptions.tabPosition for the current lick. */
+function tabIndex(): 'auto' | number {
+  if (!lick || settings.tabPosition === 'auto') return 'auto';
+  const i = lickFingerings(lick, inst())?.positions.findIndex(p => p.label === settings.tabPosition) ?? -1;
+  return i < 0 ? 'auto' : i;
+}
+
 /* ---------------------------------------------------------------- display */
 
 function activeBar(): number | undefined {
@@ -145,6 +179,8 @@ function renderNotation(): void {
   renderLick($('score'), lick, inst(), {
     highlight,
     showTab: settings.showTab && !!inst().tab,
+    tabPosition: tabIndex(),
+    showFingers: settings.showFingers,
     highlightColor: SHEET_ACCENT,
     chordFont: CHORD_FONT,
     romans: romansFor(lick.progressionId),
@@ -240,6 +276,7 @@ function showLick(l: Lick, record: boolean, replaceId?: string): void {
   }
   fillKeyOptions();
   renderMeta();
+  syncPositions();
   renderNotation();
   updateTransport();
   updateFav();
@@ -340,7 +377,7 @@ async function doPdf(): Promise<void> {
   exportStatus('Building PDF…');
   try {
     const { exportPdf } = await import('./export/pdf');
-    await exportPdf(lick, inst());
+    await exportPdf(lick, inst(), { tabPosition: tabIndex(), showFingers: settings.showFingers });
     exportStatus('PDF downloaded.', 3000);
   } catch (err) {
     exportStatus('Could not create the PDF: ' + String((err as Error)?.message ?? err));
@@ -447,6 +484,11 @@ function bind(): void {
   onCheck('c-swing', on => { setting('swing', on); restartIfPlaying(); });
   onCheck('c-hide', on => { setting('hide', on); if (!on) renderNotation(); });
   onCheck('c-tab', on => { setting('showTab', on); renderNotation(); });
+  onCheck('c-fingers', on => { setting('showFingers', on); renderNotation(); });
+  $<HTMLSelectElement>('sel-pos').addEventListener('change', e => {
+    setting('tabPosition', (e.target as HTMLSelectElement).value);
+    renderNotation();
+  });
   $('t-fav').addEventListener('click', () => {
     if (!lick) return;
     favorites = favorites.some(f => f.lick.id === lick!.id) ? store.removeFavorite(lick.id) : store.addFavorite(lick);

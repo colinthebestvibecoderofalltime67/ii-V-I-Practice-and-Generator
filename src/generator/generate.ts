@@ -332,6 +332,7 @@ export function generateLick(opts: GenerateOptions): Lick {
     notes: b.notes,
     totalTicks,
     fragmentIds: b.plan.map(p => p.frag.id),
+    cellStarts: b.plan.map(p => p.start),
     difficulty: scoreLick(b.notes, chords, def),
     createdAt: Date.now(),
   };
@@ -370,6 +371,7 @@ export function transposeLick(lick: Lick, keyPc: number, range: [number, number]
     chords,
     notes,
     fragmentIds: [...lick.fragmentIds],
+    ...(Array.isArray(lick.cellStarts) ? { cellStarts: [...lick.cellStarts] } : {}),
     difficulty: { ...lick.difficulty, features: lick.difficulty.features.map(f => ({ ...f })) },
     createdAt: Date.now(),
   };

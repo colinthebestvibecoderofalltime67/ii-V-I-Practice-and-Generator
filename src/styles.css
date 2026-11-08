@@ -18,6 +18,8 @@
   --warn: #8A4B00;
   --focus: #2747C9;
   --radius: 6px;
+  --page-max: 1240px;
+  --gutter: 24px;
   --shadow-sheet: 0 1px 2px rgba(28, 28, 26, .06), 0 8px 24px rgba(28, 28, 26, .05);
   --font: Geist, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -97,23 +99,22 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .check { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; }
 
 /* ---------- app bar ---------- */
-.appbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-  min-height: 56px; padding: 0 16px 0 32px; border-bottom: 1px solid var(--rule);
-}
+.wrap { width: 100%; max-width: var(--page-max); margin: 0 auto; padding: 0 var(--gutter); }
+.appbar { border-bottom: 1px solid var(--rule); }
+.appbar > .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-height: 56px; }
 .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
 .brand-name { font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
 .brand-tag { color: var(--muted); font-size: 13px; }
-.appnav { display: flex; align-items: center; gap: 2px; }
+.appnav { display: flex; align-items: center; gap: 2px; margin-right: -11px; } /* optical: align the last icon with the column edge */
 
 /* ---------- shell ---------- */
-.shell { flex: 1; display: flex; flex-wrap: wrap; align-items: stretch; width: 100%; max-width: 1360px; margin: 0 auto; }
+.shell { flex: 1; display: flex; flex-wrap: wrap; align-items: stretch; width: 100%; max-width: var(--page-max); margin: 0 auto; padding: 0 var(--gutter); }
 .side {
-  order: -1; flex: 1 1 280px; max-width: 320px; padding: 26px 24px 28px 28px; border-right: 1px solid var(--rule);
+  order: -1; flex: 1 1 260px; max-width: 296px; padding: 26px 24px 28px 0;
   display: flex; flex-direction: column; gap: 26px;
 }
 .side-h { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.main { flex: 999 1 560px; min-width: 0; padding: 26px 32px 28px; display: flex; flex-direction: column; gap: 24px; }
+.main { flex: 999 1 560px; min-width: 0; padding: 26px 0 28px 32px; border-left: 1px solid var(--rule); display: flex; flex-direction: column; gap: 24px; }
 
 /* sidebar groups */
 .group { display: flex; flex-direction: column; gap: 4px; }
@@ -133,7 +134,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .keyrow select { flex: 1; min-width: 0; }
 .radio-row { display: flex; gap: 14px; flex-wrap: wrap; }
 .radio-row label { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; cursor: pointer; }
-.gen { margin-top: auto; min-height: 46px; font-size: 15px; width: 100%; }
+.gen { margin-top: 4px; min-height: 46px; font-size: 15px; width: 100%; }
 .gen kbd { color: inherit; }
 
 /* ---------- lick header ---------- */
@@ -197,7 +198,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .feat tr.other .meter > div { background: var(--muted); }
 
 /* ---------- footer ---------- */
-.foot { padding: 18px 32px 28px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--rule); }
+.foot { padding: 18px 0 28px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--rule); }
 
 /* ---------- dialogs ---------- */
 dialog.sheet {
@@ -233,12 +234,13 @@ dialog::backdrop { background: rgba(20, 20, 18, .35); }
 
 /* ---------- phone ---------- */
 @media (max-width: 760px) {
-  .appbar { padding: 0 8px 0 16px; min-height: 52px; }
+  :root { --gutter: 16px; }
+  .appbar > .wrap { min-height: 52px; }
   .brand-tag { display: none; }
   .shell { flex-direction: column; }
-  .side { order: 2; max-width: none; flex: none; padding: 22px 16px 24px; border-right: 0; border-top: 1px solid var(--rule); gap: 20px; }
+  .side { order: 2; max-width: none; flex: none; padding: 22px 0 24px; border-top: 1px solid var(--rule); gap: 20px; }
   .side-h { position: static; width: auto; height: auto; overflow: visible; clip: auto; font-size: 16px; font-weight: 600; }
-  .main { padding: 18px 16px 8px; gap: 20px; flex: none; }
+  .main { padding: 18px 0 8px; gap: 20px; flex: none; border-left: 0; }
   .lick-title h1 { font-size: 22px; }
   .paper { margin: 0 -4px; padding: 12px 8px 6px; }
   .playback { gap: 12px; }
@@ -256,5 +258,5 @@ dialog::backdrop { background: rgba(20, 20, 18, .35); }
   .radio-list.tiers label { align-items: center; min-height: 40px; padding: 0; }
   .radio-list.tiers input { margin-top: 0; }
   .gen { min-height: 50px; font-size: 16px; }
-  .foot { padding: 16px; }
+  .foot { padding: 16px 0; }
 }

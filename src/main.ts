@@ -4,6 +4,7 @@ import { TIER_NAMES } from './types';
 import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
 import { INSTRUMENTS, concertRange, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
+import { FEATURE_MAX } from './difficulty/score';
 import { renderLick } from './render/notation';
 import { lickFingerings } from './render/tab';
 import { Player, type PlayOptions } from './audio/player';
@@ -24,7 +25,6 @@ let history: StoredEntry[] = store.loadHistory();
 let favorites: StoredEntry[] = store.loadFavorites();
 let lick: Lick | null = null;
 let highlight: number[] = [];
-let status = 'Ready';
 const player = new Player();
 
 const inst = (): Instrument => getInstrument(settings.instrumentId);
@@ -32,85 +32,104 @@ const persist = (): void => store.saveSettings(settings);
 const effectiveBpm = (): number => (settings.slow ? Math.round(settings.bpm * 0.6) : settings.bpm);
 const TIERS: Tier[] = [1, 2, 3, 4];
 
-/* ---------------------------------------------------------------- selects */
+/** Highlight colour on the (always white) notation sheet. */
+const SHEET_ACCENT = '#2747C9';
+const CHORD_FONT = { family: "Geist, system-ui, sans-serif", weight: '600' };
+
+/** Short names for the sidebar list; the full name is used everywhere else. */
+const SHORT_NAME: Record<string, string> = {
+  'major-251': 'Major',
+  'major-251-alt': 'Altered dominant',
+  'minor-251': 'Minor',
+  'tritone-251': 'Tritone substitute',
+  'backdoor-251': 'Backdoor',
+};
+const TIER_DESC: Record<Tier, string> = {
+  1: 'Quarter notes, chord tones',
+  2: 'Eighth notes, scale and arpeggio',
+  3: 'Enclosures, chromatic approaches',
+  4: '16th-note runs, altered colour',
+};
+
+/** "Imaj7" -> "I", "V7alt" -> "V7alt", "iiø7" -> "iiø", "i6" -> "i". */
+const romanShort = (r: string): string => r.replace(/maj7|7(?!alt)|6/g, '');
+const romansFor = (progressionId: string): string[] => getProgression(progressionId).slots.map(s => romanShort(s.roman));
+const lengthShort = (id: keyof typeof LENGTHS): string => /\((.*)\)/.exec(LENGTHS[id].label)?.[1] ?? LENGTHS[id].label;
+const instShort = (i: Instrument): string => i.name.replace(/\s*\(.*\)$/, '');
+
+/* ---------------------------------------------------------------- controls */
+
+function radio(name: string, value: string, html: string): HTMLLabelElement {
+  const l = document.createElement('label');
+  const input = document.createElement('input');
+  input.type = 'radio';
+  input.name = name;
+  input.value = value;
+  l.append(input);
+  l.insertAdjacentHTML('beforeend', html);
+  return l;
+}
 
 function buildStaticControls(): void {
-  const prog = $<HTMLSelectElement>('sel-prog');
-  prog.innerHTML = PROGRESSIONS.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-  const inst = $<HTMLSelectElement>('sel-inst');
-  inst.innerHTML = INSTRUMENTS.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
-
-  const seg = $('seg-len');
-  for (const [id, def] of Object.entries(LENGTHS)) {
-    const m = /^(\w+) \((.*)\)$/.exec(def.label);
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.dataset.len = id;
-    b.innerHTML = `<span>${m ? m[1] : def.label}</span><small class="sub">${m ? m[2] : ''}</small>`;
-    b.title = def.label;
-    seg.appendChild(b);
-  }
-  const pills = $('pills-tier');
-  for (const t of TIERS) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'pill';
-    b.dataset.tier = String(t);
-    b.textContent = TIER_NAMES[t];
-    pills.appendChild(b);
-  }
+  $('prog-list').replaceChildren(...PROGRESSIONS.map(p =>
+    radio('prog', p.id, `<span>${SHORT_NAME[p.id] ?? p.name}</span><span class="roman">${romansFor(p.id).join(' ')}</span>`)));
+  $('tier-list').replaceChildren(...TIERS.map(t =>
+    radio('tier', String(t), `<span>${TIER_NAMES[t]}<span class="desc">${TIER_DESC[t]}</span></span>`)));
+  $('len-list').replaceChildren(...(Object.keys(LENGTHS) as (keyof typeof LENGTHS)[]).map(id =>
+    radio('len', id, `<span>${lengthShort(id)}</span>`)));
+  $<HTMLSelectElement>('sel-inst').innerHTML = INSTRUMENTS.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
 }
 
 function fillKeyOptions(): void {
   const mode = getProgression(settings.progressionId).mode;
   const sel = $<HTMLSelectElement>('sel-key');
-  let html = '<option value="random">Random key</option>';
+  let html = '<option value="random">Random</option>';
   for (let pc = 0; pc < 12; pc++) html += `<option value="${pc}">${keyLabel(pc, mode)}</option>`;
   sel.innerHTML = html;
   sel.value = String(settings.key);
 }
 
-const setPressed = (el: HTMLElement, on: boolean): void => el.setAttribute('aria-pressed', String(on));
+const check = (id: string, on: boolean): void => { $<HTMLInputElement>(id).checked = on; };
+const setRadio = (name: string, value: string): void => {
+  document.querySelectorAll<HTMLInputElement>(`input[name="${name}"]`).forEach(r => { r.checked = r.value === value; });
+};
 
 function syncControls(): void {
   const prog = getProgression(settings.progressionId);
   const i = inst();
-  $<HTMLSelectElement>('sel-prog').value = settings.progressionId;
+  setRadio('prog', settings.progressionId);
+  setRadio('tier', String(settings.tier));
+  setRadio('len', settings.length);
   $<HTMLSelectElement>('sel-inst').value = settings.instrumentId;
   $<HTMLSelectElement>('sel-key').value = String(settings.key);
   $('prog-desc').textContent = prog.description;
-  $('seg-len').querySelectorAll('button').forEach(b => setPressed(b, b.dataset.len === settings.length));
-  $('pills-tier').querySelectorAll('button').forEach(b => setPressed(b, b.dataset.tier === String(settings.tier)));
   const hint = $('tier-hint');
   if (settings.tier < prog.minTier) {
     hint.hidden = false;
-    hint.textContent = `${prog.name} is usually ${TIER_NAMES[prog.minTier]} material. ${TIER_NAMES[settings.tier]} licks here will be very simple.`;
+    hint.textContent = `${prog.name} is usually ${TIER_NAMES[prog.minTier]} material, so ${TIER_NAMES[settings.tier]} licks here will be very simple.`;
   } else hint.hidden = true;
 
-  setPressed($('t-piano'), settings.piano);
-  setPressed($('t-loop'), settings.loop);
-  setPressed($('t-swing'), settings.swing);
-  setPressed($('t-hide'), settings.hide);
-  setPressed($('t-slow'), settings.slow);
-  const tabBtn = $('t-tab');
-  tabBtn.hidden = !i.tab;
-  setPressed(tabBtn, settings.showTab);
-  const fingBtn = $('t-fingers');
-  fingBtn.hidden = !i.tab || !settings.showTab;
-  setPressed(fingBtn, settings.showFingers);
+  check('c-swing', settings.swing);
+  check('c-piano', settings.piano);
+  check('c-loop', settings.loop);
+  check('c-hide', settings.hide);
+  $('tab-wrap').hidden = !i.tab;
+  check('c-tab', settings.showTab);
+  $('fingers-wrap').hidden = !i.tab || !settings.showTab;
+  check('c-fingers', settings.showFingers);
   syncPositions();
-  $('t-hide').textContent = settings.hide ? 'Show notation' : 'Hide notation';
+  check('c-slow', settings.slow);
+  check('c-count', settings.countIn);
+  check('c-met', settings.metronome);
+  check('c-midi', settings.midiBacking);
   $<HTMLInputElement>('r-bpm').value = String(settings.bpm);
-  $('bpm-val').textContent = `${effectiveBpm()} BPM${settings.slow ? ' (slow)' : ''}`;
+  $('bpm-val').textContent = String(effectiveBpm());
+  $('bpm-val').title = settings.slow ? `Slow practice: 60% of ${settings.bpm}` : '';
   $<HTMLSelectElement>('sel-comp').value = settings.comp;
   $<HTMLInputElement>('r-lead').value = String(settings.leadVolume);
   $<HTMLInputElement>('r-piano').value = String(settings.pianoVolume);
-  $<HTMLInputElement>('c-count').checked = settings.countIn;
-  $<HTMLInputElement>('c-met').checked = settings.metronome;
-  $<HTMLInputElement>('c-midi').checked = settings.midiBacking;
 
-  const paper = $('paper');
-  paper.classList.toggle('covered', settings.hide);
+  $('paper').classList.toggle('covered', settings.hide);
   $('score').classList.toggle('hidden', settings.hide);
   $('cover').setAttribute('aria-hidden', String(!settings.hide));
   updateTransport();
@@ -119,99 +138,124 @@ function syncControls(): void {
 
 /* ---------------------------------------------------------------- tab positions */
 
-/** Playable positions of the current lick on the current instrument (empty for non-tab instruments). */
-function tabPositions(): string[] {
-  if (!lick || !inst().tab) return [];
-  return lickFingerings(lick, inst())?.positions.map(p => p.label) ?? [];
-}
-
-/** Fill the Position select; fall back to Auto when the saved position is not playable for this lick. */
+/** Fill the Position select from the current lick; fall back to Auto when the saved position is not playable. */
 function syncPositions(): void {
-  const field = $('f-pos');
-  const show = !!inst().tab && settings.showTab;
-  field.hidden = !show;
-  field.parentElement?.classList.toggle('has-pos', show);
-  const labels = tabPositions();
-  if (lick && settings.tabPosition !== 'auto' && !labels.includes(settings.tabPosition)) {
+  const i = inst();
+  const fing = lick && i.tab ? lickFingerings(lick, i) : null;
+  $('pos-wrap').hidden = !i.tab || !settings.showTab;
+  if (fing && settings.tabPosition !== 'auto' && !fing.positions.some(p => p.label === settings.tabPosition)) {
     settings.tabPosition = 'auto';
     persist();
   }
   const sel = $<HTMLSelectElement>('sel-pos');
-  const fing = lick && inst().tab ? lickFingerings(lick, inst()) : null;
-  const html = ['<option value="auto">Auto (easiest)</option>'];
-  fing?.positions.forEach(p => {
-    const w = p.window[0] === p.window[1] ? `fret ${p.window[0]}` : `frets ${p.window[0]}–${p.window[1]}`;
-    const sh = p.shifts ? ` · ${p.shifts} shift${p.shifts > 1 ? 's' : ''}` : '';
-    html.push(`<option value="${p.label}">${p.label} (${w}${sh})</option>`);
-  });
-  const next = html.join('');
-  if (sel.innerHTML !== next) sel.innerHTML = next;
+  const opts = [new Option('Auto (easiest)', 'auto')];
+  for (const p of fing?.positions ?? []) {
+    const frets = p.window[0] === p.window[1] ? `fret ${p.window[0]}` : `frets ${p.window[0]}–${p.window[1]}`;
+    const shifts = p.shifts ? `, ${p.shifts} shift${p.shifts > 1 ? 's' : ''}` : '';
+    opts.push(new Option(`${p.label} (${frets}${shifts})`, p.label));
+  }
+  const sig = opts.map(o => o.value + o.text).join('|');
+  if (sel.dataset.sig !== sig) { sel.replaceChildren(...opts); sel.dataset.sig = sig; }
   sel.value = settings.tabPosition;
 }
 
+/** RenderOptions.tabPosition for the current lick. */
 function tabIndex(): 'auto' | number {
-  if (settings.tabPosition === 'auto') return 'auto';
-  const i = tabPositions().indexOf(settings.tabPosition);
+  if (!lick || settings.tabPosition === 'auto') return 'auto';
+  const i = lickFingerings(lick, inst())?.positions.findIndex(p => p.label === settings.tabPosition) ?? -1;
   return i < 0 ? 'auto' : i;
 }
 
 /* ---------------------------------------------------------------- display */
 
+function activeBar(): number | undefined {
+  if (!lick || !highlight.length) return undefined;
+  const n = lick.notes[highlight[0]];
+  return n ? Math.floor(n.start / 16) : undefined;
+}
+
 function renderNotation(): void {
   if (!lick) return;
   renderLick($('score'), lick, inst(), {
-    highlight, showTab: settings.showTab && !!inst().tab, tabPosition: tabIndex(), showFingers: settings.showFingers,
+    highlight,
+    showTab: settings.showTab && !!inst().tab,
+    tabPosition: tabIndex(),
+    showFingers: settings.showFingers,
+    highlightColor: SHEET_ACCENT,
+    chordFont: CHORD_FONT,
+    romans: romansFor(lick.progressionId),
+    activeBar: activeBar(),
   });
 }
 
 function setStatus(s: string): void {
-  status = s;
   $('status').textContent = s;
 }
 
 function renderMeta(): void {
   if (!lick) return;
   const d = lick.difficulty;
-  const badge = $('tier-badge');
-  badge.dataset.tier = String(d.tier);
-  badge.textContent = `${TIER_NAMES[d.tier]} · ${Math.round(d.score)}/100`;
-  const note = $('tier-note');
-  if (d.tier !== lick.requestedTier) {
-    note.hidden = false;
-    note.textContent = `You asked for ${TIER_NAMES[lick.requestedTier]}; this one came out ${TIER_NAMES[d.tier]}.`;
-  } else note.hidden = true;
-
   const i = inst();
-  const parts = [`<b>${progressionName(lick)}</b>`, LENGTHS[lick.length].label, `<b>${keyLabel(lick.keyPc, lick.mode)}</b> concert`];
-  if (isTransposing(i)) parts[2] += ` · you read <b>${writtenKeyLabel(lick, i)}</b>`;
-  $('info').innerHTML = parts.join(' · ');
+  $('lick-title').textContent = `${progressionName(lick)} in ${keyLabel(lick.keyPc, lick.mode)}`;
+  const who = isTransposing(i) ? `${instShort(i)}, written in ${writtenKeyLabel(lick, i)}` : instShort(i);
+  const meta = $('lick-meta');
+  meta.replaceChildren(`${who} · ${lengthShort(lick.length)} · `);
+  if (d.tier === lick.requestedTier) meta.append(`${TIER_NAMES[d.tier]}, as requested`);
+  else {
+    const s = document.createElement('span');
+    s.className = 'asked';
+    s.textContent = `you asked for ${TIER_NAMES[lick.requestedTier]}; this came out ${TIER_NAMES[d.tier]}`;
+    meta.append(s);
+  }
 
-  const feats = d.features.filter(f => f.points > 0.5).slice(0, 3);
-  $('why').hidden = feats.length === 0;
-  const chips = $('chips');
-  chips.replaceChildren(...feats.map(f => {
-    const c = document.createElement('span');
-    c.className = 'chip';
-    c.textContent = f.label;
-    return c;
+  $('tier-name').textContent = TIER_NAMES[d.tier];
+  const score = Math.round(d.score);
+  $('tier-score').textContent = `${score} / 100`;
+  const pct = Math.max(0, Math.min(100, d.score));
+  $('scale-fill').style.width = `${pct}%`;
+  $('scale-mark').style.left = `calc(${pct}% - 1px)`;
+  $('feat-cap').textContent = `What makes it ${TIER_NAMES[d.tier]}`;
+
+  const max = FEATURE_MAX as Record<string, number>;
+  const shown = d.features.filter(f => f.points > 0.5).slice(0, 3);
+  const rest = d.features.filter(f => !shown.includes(f)).reduce((a, f) => a + f.points, 0);
+  const rows: { label: string; points: number; frac: number; other?: boolean }[] = shown.map(f => ({
+    label: f.label, points: f.points, frac: f.points / (max[f.id] ?? 20),
+  }));
+  if (rest > 0.5) rows.push({ label: shown.length ? 'Everything else' : 'Small details', points: rest, frac: rest / 20, other: true });
+  if (!rows.length) rows.push({ label: 'Nothing tricky: chord tones in simple rhythm', points: 0, frac: 0, other: true });
+  $('feat-rows').replaceChildren(...rows.map(r => {
+    const tr = document.createElement('tr');
+    if (r.other) tr.className = 'other';
+    const a = document.createElement('td');
+    a.textContent = r.label;
+    const b = document.createElement('td');
+    b.className = 'bar';
+    b.innerHTML = `<div class="meter"><div style="width:${Math.round(Math.min(1, r.frac) * 100)}%"></div></div>`;
+    const c = document.createElement('td');
+    c.className = 'pts';
+    c.textContent = `+${Math.round(r.points)}`;
+    tr.append(a, b, c);
+    return tr;
   }));
 }
 
+const PLAY_PATH = '<path d="M7 4.5v15l13-7.5z"/>';
+const PAUSE_PATH = '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>';
+
 function updateTransport(): void {
-  const btn = $('btn-play');
-  btn.textContent = player.state === 'playing' ? '❚❚ Pause' : player.state === 'paused' ? '▶ Resume' : '▶ Play';
+  const playing = player.state === 'playing';
+  $('play-label').textContent = playing ? 'Pause' : player.state === 'paused' ? 'Resume' : 'Play';
+  $('play-icon').innerHTML = playing ? PAUSE_PATH : PLAY_PATH;
   const dis = !lick;
-  for (const id of ['btn-play', 'btn-stop', 'btn-midi', 'btn-pdf', 't-fav']) $<HTMLButtonElement>(id).disabled = dis;
+  for (const id of ['btn-play', 'btn-stop', 'btn-export', 't-fav']) $<HTMLButtonElement>(id).disabled = dis;
 }
 
 function updateFav(): void {
   const on = !!lick && favorites.some(f => f.lick.id === lick!.id);
-  setPressed($('t-fav'), on);
-  $('fav-star').textContent = on ? '★' : '☆';
-  const n = favorites.length;
-  const c = $('lib-count');
-  c.hidden = n === 0;
-  c.textContent = String(n);
+  $('t-fav').setAttribute('aria-pressed', String(on));
+  $('fav-label').textContent = on ? 'Saved' : 'Save';
+  $('lib-count').textContent = String(favorites.length);
 }
 
 /* ---------------------------------------------------------------- lick lifecycle */
@@ -230,6 +274,7 @@ function showLick(l: Lick, record: boolean, replaceId?: string): void {
     if (replaceId && replaceId !== l.id) history = store.removeHistory(replaceId);
     history = store.addHistory(l);
   }
+  fillKeyOptions();
   renderMeta();
   syncPositions();
   renderNotation();
@@ -262,7 +307,7 @@ function refit(keyPc: number): void {
 
 function restartIfPlaying(): void {
   if (player.state === 'stopped') return;
-  if (player.state === 'paused') { stopPlayback(); return; }
+  if (player.state === 'paused') { stopPlayback(); renderNotation(); return; }
   startPlayback();
 }
 
@@ -281,12 +326,15 @@ function playOptions(): PlayOptions {
 function startPlayback(): void {
   if (!lick) return;
   highlight = [];
+  const bars = Math.max(1, Math.ceil(lick.totalTicks / 16));
   player.play(lick, playOptions(), {
     onNote: idx => {
       highlight = idx;
+      const b = activeBar();
+      if (b !== undefined) setStatus(`bar ${b + 1} / ${bars}`);
       if (!settings.hide) renderNotation();
     },
-    onStatus: setStatus,
+    onStatus: s => { if (/count/i.test(s)) setStatus(s.toLowerCase()); },
     onEnd: () => { highlight = []; setStatus('Ready'); updateTransport(); renderNotation(); },
   });
   updateTransport();
@@ -296,7 +344,7 @@ function togglePlay(): void {
   if (!lick) return;
   if (player.state === 'stopped') startPlayback();
   else if (player.state === 'playing') { player.pause(); setStatus('Paused'); }
-  else { player.resume(); setStatus(`${effectiveBpm()} BPM`); }
+  else { player.resume(); }
   updateTransport();
 }
 
@@ -308,31 +356,72 @@ function onStop(): void {
 
 /* ---------------------------------------------------------------- export */
 
-async function doMidi(): Promise<void> {
+function exportStatus(text: string, clearAfter = 0): void {
+  const out = $('export-status');
+  out.textContent = text;
+  if (clearAfter) setTimeout(() => { if (out.textContent === text) out.textContent = ''; }, clearAfter);
+}
+
+function doMidi(): void {
   if (!lick) return;
   const bytes = lickToMidi(lick, {
     bpm: effectiveBpm(), swing: settings.swing, comping: settings.midiBacking, comp: settings.comp,
     program: PROGRAMS[inst().timbre],
   });
   downloadBlob(new Blob([bytes as BlobPart], { type: 'audio/midi' }), fileName(lick, 'mid'));
+  exportStatus('MIDI downloaded.', 3000);
 }
 
 async function doPdf(): Promise<void> {
   if (!lick) return;
-  const btn = $<HTMLButtonElement>('btn-pdf');
-  const out = $('export-status');
-  btn.disabled = true;
-  out.textContent = 'Building PDF…';
+  exportStatus('Building PDF…');
   try {
     const { exportPdf } = await import('./export/pdf');
     await exportPdf(lick, inst(), { tabPosition: tabIndex(), showFingers: settings.showFingers });
-    out.textContent = 'PDF saved.';
+    exportStatus('PDF downloaded.', 3000);
   } catch (err) {
-    out.textContent = 'Could not create the PDF: ' + String((err as Error)?.message ?? err);
-  } finally {
-    btn.disabled = !lick;
-    setTimeout(() => { if (out.textContent === 'PDF saved.') out.textContent = ''; }, 4000);
+    exportStatus('Could not create the PDF: ' + String((err as Error)?.message ?? err));
   }
+}
+
+/* ---------------------------------------------------------------- menus & dialogs */
+
+function setupExportMenu(): void {
+  const btn = $<HTMLButtonElement>('btn-export');
+  const pop = $('export-menu');
+  const items = () => [...pop.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  const close = (focusBtn = false): void => {
+    pop.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    if (focusBtn) btn.focus();
+  };
+  const open = (): void => {
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    items()[0]?.focus();
+  };
+  btn.addEventListener('click', () => (pop.hidden ? open() : close()));
+  pop.addEventListener('keydown', e => {
+    const list = items();
+    const i = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === 'Escape') { e.preventDefault(); close(true); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); list[(i + 1) % list.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); list[(i - 1 + list.length) % list.length].focus(); }
+    else if (e.key === 'Tab') close();
+  });
+  document.addEventListener('click', e => {
+    if (!pop.hidden && !(e.target as HTMLElement).closest('.menu')) close();
+  });
+  $('btn-midi').addEventListener('click', () => { close(true); doMidi(); });
+  $('btn-pdf').addEventListener('click', () => { close(true); void doPdf(); });
+}
+
+function setupDialog(id: string, openerId: string): HTMLDialogElement {
+  const dlg = $<HTMLDialogElement>(id);
+  $(openerId).addEventListener('click', () => { if (!dlg.open) dlg.showModal(); });
+  dlg.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dlg.close()));
+  dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+  return dlg;
 }
 
 /* ---------------------------------------------------------------- wiring */
@@ -348,23 +437,24 @@ function bind(): void {
     onRemoveFavorite: id => { favorites = store.removeFavorite(id); updateFav(); },
     onClearHistory: () => { store.clearHistory(); history = []; },
   });
+  const dialogs = [setupDialog('sound', 'btn-sound'), setupDialog('keys', 'btn-keys')];
+  setupExportMenu();
 
   const setting = <K extends keyof Settings>(k: K, v: Settings[K]): void => { settings[k] = v; persist(); syncControls(); };
+  const onRadio = (name: string, fn: (v: string) => void): void => {
+    document.querySelectorAll<HTMLInputElement>(`input[name="${name}"]`).forEach(r =>
+      r.addEventListener('change', () => { if (r.checked) fn(r.value); }));
+  };
+  const onCheck = (id: string, fn: (on: boolean) => void): void => {
+    const el = $<HTMLInputElement>(id);
+    el.addEventListener('change', () => fn(el.checked));
+  };
 
   $('btn-gen').addEventListener('click', generate);
 
-  $<HTMLSelectElement>('sel-prog').addEventListener('change', e => {
-    settings.progressionId = (e.target as HTMLSelectElement).value;
-    persist(); fillKeyOptions(); syncControls();
-  });
-  $('seg-len').addEventListener('click', e => {
-    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-len]');
-    if (b) setting('length', b.dataset.len as Settings['length']);
-  });
-  $('pills-tier').addEventListener('click', e => {
-    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-tier]');
-    if (b) setting('tier', Number(b.dataset.tier) as Tier);
-  });
+  onRadio('prog', v => { settings.progressionId = v; persist(); fillKeyOptions(); syncControls(); });
+  onRadio('tier', v => setting('tier', Number(v) as Tier));
+  onRadio('len', v => setting('length', v as Settings['length']));
   $<HTMLSelectElement>('sel-inst').addEventListener('change', e => {
     settings.instrumentId = (e.target as HTMLSelectElement).value;
     persist(); syncControls();
@@ -386,15 +476,15 @@ function bind(): void {
   $('key-dn').addEventListener('click', () => nudge(-1));
   $('key-up').addEventListener('click', () => nudge(1));
 
-  // transport toggles
+  // transport
   $('btn-play').addEventListener('click', togglePlay);
   $('btn-stop').addEventListener('click', onStop);
-  $('t-piano').addEventListener('click', () => { setting('piano', !settings.piano); restartIfPlaying(); });
-  $('t-loop').addEventListener('click', () => { setting('loop', !settings.loop); restartIfPlaying(); });
-  $('t-swing').addEventListener('click', () => { setting('swing', !settings.swing); restartIfPlaying(); });
-  $('t-hide').addEventListener('click', () => { setting('hide', !settings.hide); if (!settings.hide) renderNotation(); });
-  $('t-tab').addEventListener('click', () => { setting('showTab', !settings.showTab); renderNotation(); });
-  $('t-fingers').addEventListener('click', () => { setting('showFingers', !settings.showFingers); renderNotation(); });
+  onCheck('c-piano', on => { setting('piano', on); restartIfPlaying(); });
+  onCheck('c-loop', on => { setting('loop', on); restartIfPlaying(); });
+  onCheck('c-swing', on => { setting('swing', on); restartIfPlaying(); });
+  onCheck('c-hide', on => { setting('hide', on); if (!on) renderNotation(); });
+  onCheck('c-tab', on => { setting('showTab', on); renderNotation(); });
+  onCheck('c-fingers', on => { setting('showFingers', on); renderNotation(); });
   $<HTMLSelectElement>('sel-pos').addEventListener('change', e => {
     setting('tabPosition', (e.target as HTMLSelectElement).value);
     renderNotation();
@@ -404,15 +494,12 @@ function bind(): void {
     favorites = favorites.some(f => f.lick.id === lick!.id) ? store.removeFavorite(lick.id) : store.addFavorite(lick);
     updateFav();
   });
-
-  // settings
   const bpm = $<HTMLInputElement>('r-bpm');
   bpm.addEventListener('input', () => { settings.bpm = Number(bpm.value); persist(); syncControls(); });
   bpm.addEventListener('change', restartIfPlaying);
-  const bumpBpm = (d: number): void => { setting('bpm', Math.min(320, Math.max(40, settings.bpm + d))); restartIfPlaying(); };
-  $('bpm-dn').addEventListener('click', () => bumpBpm(-5));
-  $('bpm-up').addEventListener('click', () => bumpBpm(5));
-  $('t-slow').addEventListener('click', () => { setting('slow', !settings.slow); restartIfPlaying(); });
+
+  // sound settings
+  onCheck('c-slow', on => { setting('slow', on); restartIfPlaying(); });
   $<HTMLSelectElement>('sel-comp').addEventListener('change', e => { setting('comp', (e.target as HTMLSelectElement).value as Settings['comp']); restartIfPlaying(); });
   const vol = (): void => {
     settings.leadVolume = Number($<HTMLInputElement>('r-lead').value);
@@ -422,21 +509,19 @@ function bind(): void {
   };
   $('r-lead').addEventListener('input', vol);
   $('r-piano').addEventListener('input', vol);
-  $('c-count').addEventListener('change', e => setting('countIn', (e.target as HTMLInputElement).checked));
-  $('c-met').addEventListener('change', e => { setting('metronome', (e.target as HTMLInputElement).checked); restartIfPlaying(); });
-  $('c-midi').addEventListener('change', e => setting('midiBacking', (e.target as HTMLInputElement).checked));
-
-  $('btn-midi').addEventListener('click', () => void doMidi());
-  $('btn-pdf').addEventListener('click', () => void doPdf());
+  onCheck('c-count', on => setting('countIn', on));
+  onCheck('c-met', on => { setting('metronome', on); restartIfPlaying(); });
+  onCheck('c-midi', on => setting('midiBacking', on));
 
   // keyboard shortcuts
   document.addEventListener('keydown', e => {
-    if (e.ctrlKey || e.metaKey || e.altKey || lib.isOpen) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || lib.isOpen || dialogs.some(d => d.open)) return;
     const t = e.target as HTMLElement | null;
     const tag = t?.tagName ?? '';
-    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
+    if (tag === 'SELECT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
+    if (tag === 'INPUT' && !['radio', 'checkbox', 'range'].includes((t as HTMLInputElement).type)) return;
     if (e.key === ' ' || e.code === 'Space') {
-      if (tag === 'BUTTON' || tag === 'SUMMARY' || tag === 'A') return;
+      if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT') return;
       e.preventDefault();
       togglePlay();
     } else if (e.key === 'g' || e.key === 'G') {
@@ -468,4 +553,5 @@ if (history.length) {
 } else {
   generate();
 }
-setStatus(status);
+// Chord symbols are measured with the web font; redraw once it has loaded.
+document.fonts?.ready.then(() => renderNotation()).catch(() => undefined);

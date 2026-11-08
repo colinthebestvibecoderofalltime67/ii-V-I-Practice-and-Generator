@@ -16,11 +16,23 @@ export interface RenderOptions {
   tabPosition?: 'auto' | number;
   /** Show a suggested finger above every fretted tab note (otherwise only where the hand shifts). */
   showFingers?: boolean;
+  /** Colour for highlighted (now-playing) notes. Default: burnt orange. */
+  highlightColor?: string;
+  /** Chord-symbol font. Default: Georgia bold. */
+  chordFont?: { family: string; weight?: string };
+  /** Roman numeral per lick.chords entry, drawn small and grey after each chord symbol. */
+  romans?: string[];
+  /** Bar index (0-based) to tint as "now playing"; ignored in print mode. */
+  activeBar?: number;
+  /** Fill for the active-bar tint. Default: a faint blue. */
+  activeBarColor?: string;
 }
 
-const HL = '#b4531a';
+const DEFAULT_HL = '#b4531a';
 const CHORD_FONT = "Georgia, 'Times New Roman', serif";
 const CHORD_SIZE = 19;
+const ROMAN_FONT = "'Geist Mono', ui-monospace, monospace";
+const ROMAN_SIZE = 12;
 const DUR_NAME: Record<number, [string, number]> = {
   1: ['16', 0], 2: ['8', 0], 3: ['8', 1], 4: ['q', 0], 6: ['q', 1], 8: ['h', 0], 12: ['h', 1], 16: ['w', 0],
 };
@@ -163,6 +175,11 @@ export function renderLick(
 function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: RenderOptions): SVGSVGElement {
   const print = !!opts.print;
   const hl = new Set(print ? [] : opts.highlight ?? []);
+  const HL = opts.highlightColor ?? DEFAULT_HL;
+  const chordFamily = opts.chordFont?.family ?? CHORD_FONT;
+  const chordWeight = opts.chordFont?.weight ?? 'bold';
+  const romans = opts.romans && opts.romans.length === lick.chords.length ? opts.romans : null;
+  const activeBar = print ? -1 : opts.activeBar ?? -1;
   const clef = inst.clef;
   const writtenKey = mod12(lick.keyPc + inst.transpose);
   const sharps = keyUsesSharps(writtenKey, lick.mode);
@@ -257,8 +274,11 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const probe = new Renderer(probeDiv, Renderer.Backends.SVG);
   probe.resize(100, 100);
   const pctx = probe.getContext();
-  pctx.setFont(CHORD_FONT, CHORD_SIZE, 'bold');
-  const textW = chordLabel.map(t => pctx.measureText(t).width);
+  pctx.setFont(chordFamily, CHORD_SIZE, chordWeight);
+  const labelW = chordLabel.map(t => pctx.measureText(t).width);
+  pctx.setFont(ROMAN_FONT, ROMAN_SIZE, 'normal');
+  const romanW = romans ? romans.map(r => pctx.measureText(r).width) : null;
+  const textW = labelW.map((w, i) => w + (romanW ? romanW[i] + 6 : 0));
   // stave modifier widths
   const bare = new Stave(0, 0, 400);
   const bareStart = bare.getNoteStartX();
@@ -278,6 +298,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
       const span = endT - startT;
       const need = (textW[ci] + 10) * (16 / Math.max(1, span));
       if (span < 16) w = Math.max(w, need);
+      else w = Math.max(w, textW[ci] + 30); // a lone chord's label must still fit inside its bar
     });
     void b;
     return w;
@@ -342,7 +363,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   }
 
   const MARK_FONT = 'Arial, Helvetica, sans-serif';
-  const markColor = print ? '#000' : '#5b6470';
+  const markColor = print ? '#000' : '#6E6D67';
   let lastLabelRight = -Infinity;
   let lastLabelSys = -1;
   const drawTabMarks = (B: Bar, base: number, tabTop: number): void => {
@@ -403,6 +424,12 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
     sys.forEach((b, k) => {
       const B = bars[b];
       const w = widths[k];
+      if (b === activeBar) {
+        ctx.save();
+        ctx.setFillStyle(opts.activeBarColor ?? 'rgba(39,71,201,0.06)');
+        ctx.fillRect(x, y0 + 2, w, sysH - 8);
+        ctx.restore();
+      }
       const st = new Stave(x, topLineY - 40, w);
       if (k === 0) st.addClef(clef).addKeySignature(keySig);
       if (b === bars.length - 1) st.setEndBarType(Barline.type.END);
@@ -444,12 +471,20 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
 
       // chord symbols
       ctx.save();
-      ctx.setFont(CHORD_FONT, CHORD_SIZE, 'bold');
+      ctx.setFont(chordFamily, CHORD_SIZE, chordWeight);
       ctx.setFillStyle('#000');
       B.chordIdx.forEach((ci, j) => {
         const pk = B.chordPiece[j];
         const nx = pk >= 0 ? B.notes[pk].getAbsoluteX() : st.getNoteStartX();
         ctx.fillText(chordLabel[ci], nx - 2, y0 + CHORD_BASE);
+        if (romans) {
+          ctx.save();
+          ctx.setFont(ROMAN_FONT, ROMAN_SIZE, 'normal');
+          ctx.setFillStyle(print ? '#000' : '#6E6D67');
+          ctx.fillText(romans[ci], nx - 2 + labelW[ci] + 6, y0 + CHORD_BASE);
+          ctx.restore();
+          ctx.setFont(chordFamily, CHORD_SIZE, chordWeight);
+        }
       });
       ctx.restore();
       x += w;

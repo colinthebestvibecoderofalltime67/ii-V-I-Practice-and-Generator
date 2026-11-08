@@ -38,8 +38,15 @@ export const TIER_THRESHOLDS: [number, number, number];          // score cut-of
 
 ### Notation: `src/render/` (browser)
 ```ts
-export interface RenderOptions { highlight?: number[]; showTab?: boolean; print?: boolean;
-  tabPosition?: 'auto' | number; showFingers?: boolean }   // index into lickFingerings(...).positions
+export interface RenderOptions {
+  highlight?: number[]; showTab?: boolean; print?: boolean;
+  highlightColor?: string;                       // now-playing note colour (default burnt orange)
+  chordFont?: { family: string; weight?: string }; // chord-symbol font (default Georgia bold)
+  romans?: string[];                             // one roman numeral per lick.chords entry, drawn after each symbol
+  activeBar?: number; activeBarColor?: string;   // faint tint behind the bar being played (ignored in print)
+  tabPosition?: 'auto' | number;                 // tab fingering: index into lickFingerings(...).positions
+  showFingers?: boolean;                         // finger numbers on every tab note (else only at shifts)
+}
 export function renderLick(container: HTMLElement, lick: Lick, inst: Instrument, opts?: RenderOptions): SVGSVGElement | null;
 // src/render/tab.ts (pure)
 export function assignFrets(written: (number | null)[], tuning: number[], frets: number): ({ str: number; fret: number } | null)[];

@@ -94,7 +94,8 @@ describe('generateLick invariants', () => {
     console.table(rows);
     const overall = rows.reduce((a, r) => a + r.hit, 0) / rows.reduce((a, r) => a + r.licks, 0);
     console.log(`fragments: ${FRAGMENTS.length}, overall requested-tier hit rate: ${overall.toFixed(3)}`);
-    expect(overall).toBeGreaterThanOrEqual(0.5);
+    expect(overall).toBeGreaterThanOrEqual(0.9);
+    for (const r of rows) expect(r.rate, `tier ${r.tier} hit rate`).toBeGreaterThanOrEqual(0.8);
   }, 120_000);
 
   it('every instrument range works', () => {

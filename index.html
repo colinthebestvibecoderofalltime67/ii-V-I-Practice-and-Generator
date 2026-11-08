@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Free ii–V–I jazz lick generator with honest difficulty ratings, notation for any instrument, playback, MIDI and PDF export.">
+  <title>ii–V–I Lick Studio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231c6e78'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='700' text-anchor='middle' fill='white'%3E%E2%99%AA%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#score">Skip to notation</a>
+<main>
+  <header class="top">
+    <h1>ii–V–I <span>Lick Studio</span></h1>
+    <button type="button" id="btn-library" class="ghost" aria-haspopup="dialog">
+      <span aria-hidden="true">★</span> History<span class="long"> &amp; favorites</span> <span class="count" id="lib-count" hidden></span>
+    </button>
+  </header>
+
+  <section class="card" aria-label="Generate a lick">
+    <div class="gen-grid">
+      <div class="field f-prog">
+        <label class="lbl" for="sel-prog">Progression</label>
+        <select id="sel-prog"></select>
+        <p class="hint" id="prog-desc"></p>
+      </div>
+      <div class="field f-inst">
+        <label class="lbl" for="sel-inst">Instrument</label>
+        <select id="sel-inst"></select>
+      </div>
+      <div class="field f-key">
+        <label class="lbl" for="sel-key">Key (concert)</label>
+        <div class="keyrow">
+          <button type="button" id="key-dn" class="sq" title="Down a semitone" aria-label="Transpose down a semitone">−½</button>
+          <select id="sel-key"></select>
+          <button type="button" id="key-up" class="sq" title="Up a semitone" aria-label="Transpose up a semitone">+½</button>
+        </div>
+      </div>
+      <div class="field f-tier">
+        <span class="lbl" id="lbl-tier">Difficulty</span>
+        <div class="pills" id="pills-tier" role="group" aria-labelledby="lbl-tier"></div>
+        <p class="hint warn" id="tier-hint" hidden></p>
+      </div>
+      <div class="field f-len">
+        <span class="lbl" id="lbl-len">Length</span>
+        <div class="seg" id="seg-len" role="group" aria-labelledby="lbl-len"></div>
+      </div>
+    </div>
+    <button type="button" id="btn-gen" class="primary gen">Generate lick →</button>
+  </section>
+
+  <section class="paper-wrap" aria-label="Notation">
+    <div class="paper" id="paper">
+      <div id="score" tabindex="-1"></div>
+      <div class="cover" id="cover" aria-hidden="true">Now play it from memory!</div>
+    </div>
+  </section>
+
+  <section class="meta" aria-label="About this lick" aria-live="polite">
+    <div class="meta-top">
+      <span class="badge" id="tier-badge"></span>
+      <span class="info" id="info"></span>
+      <span class="status" id="status" role="status">Ready</span>
+    </div>
+    <p class="note" id="tier-note" hidden></p>
+    <div class="why" id="why" hidden>
+      <span class="lbl">Why it’s rated this way</span>
+      <span class="chips" id="chips"></span>
+    </div>
+  </section>
+
+  <section class="card transport" aria-label="Playback">
+    <div class="row">
+      <button type="button" id="btn-play" class="primary big">▶ Play</button>
+      <button type="button" id="btn-stop" class="big-sec">■ Stop</button>
+      <span class="sep" aria-hidden="true"></span>
+      <button type="button" class="toggle" id="t-piano" aria-pressed="true">Piano</button>
+      <button type="button" class="toggle" id="t-loop" aria-pressed="false">Loop</button>
+      <button type="button" class="toggle" id="t-swing" aria-pressed="true">Swing</button>
+      <button type="button" class="toggle" id="t-hide" aria-pressed="false">Hide notation</button>
+      <button type="button" class="toggle" id="t-tab" aria-pressed="true" hidden>Show tab</button>
+      <button type="button" class="toggle fav" id="t-fav" aria-pressed="false"><span aria-hidden="true" id="fav-star">☆</span> Favorite</button>
+    </div>
+  </section>
+
+  <details class="card settings" id="settings">
+    <summary>⚙ Settings</summary>
+    <div class="set-grid">
+      <div class="field">
+        <label class="lbl" for="r-bpm">Tempo · <span id="bpm-val"></span></label>
+        <div class="keyrow">
+          <button type="button" id="bpm-dn" class="sq" aria-label="Slower by 5 BPM">−5</button>
+          <input type="range" id="r-bpm" min="40" max="320" step="1">
+          <button type="button" id="bpm-up" class="sq" aria-label="Faster by 5 BPM">+5</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Speed</span>
+        <button type="button" class="toggle" id="t-slow" aria-pressed="false">Slow practice (60%)</button>
+      </div>
+      <div class="field">
+        <label class="lbl" for="sel-comp">Piano comping</label>
+        <select id="sel-comp">
+          <option value="rootless">Rootless voicings</option>
+          <option value="block">Block chords</option>
+          <option value="sparse">Sparse (beat 1)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="lbl" for="r-lead">Lead volume</label>
+        <input type="range" id="r-lead" min="0" max="1" step="0.05">
+      </div>
+      <div class="field">
+        <label class="lbl" for="r-piano">Backing volume</label>
+        <input type="range" id="r-piano" min="0" max="1" step="0.05">
+      </div>
+      <div class="field">
+        <span class="lbl">Playback</span>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="c-count"> Count-in</label>
+          <label class="check"><input type="checkbox" id="c-met"> Metronome</label>
+          <label class="check"><input type="checkbox" id="c-midi"> Include backing in MIDI export</label>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <section class="card export" aria-label="Export">
+    <div class="row">
+      <span class="lbl inline">Take it with you</span>
+      <button type="button" id="btn-midi">⬇ Download MIDI</button>
+      <button type="button" id="btn-pdf">⬇ Download PDF</button>
+      <span class="status" id="export-status" role="status"></span>
+    </div>
+  </section>
+
+  <footer>
+    <p>Every lick is generated from original melodic cells; difficulty is computed from the notes. Notation by VexFlow, sound synthesized in your browser.</p>
+    <p class="kbd">Shortcuts: <kbd>Space</kbd> play / pause · <kbd>G</kbd> generate</p>
+  </footer>
+</main>
+
+<dialog id="library" aria-labelledby="lib-title">
+  <div class="lib-head">
+    <h2 id="lib-title">Your licks</h2>
+    <button type="button" id="lib-close" class="ghost" aria-label="Close">✕</button>
+  </div>
+  <div class="tabs" role="tablist" aria-label="Library">
+    <button type="button" role="tab" id="tab-history" aria-selected="true" aria-controls="lib-list">History</button>
+    <button type="button" role="tab" id="tab-favs" aria-selected="false" aria-controls="lib-list" tabindex="-1">Favorites</button>
+  </div>
+  <div class="lib-tools"><span id="lib-sub" class="hint"></span><button type="button" id="lib-clear" class="ghost small">Clear history</button></div>
+  <ul id="lib-list" role="tabpanel" class="lib-list"></ul>
+</dialog>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -25,7 +25,8 @@ export class Library {
   private tab: Tab = 'history';
 
   constructor(private hooks: LibraryHooks) {
-    document.getElementById('btn-library')!.addEventListener('click', () => this.open());
+    document.getElementById('btn-history')!.addEventListener('click', () => this.open('history'));
+    document.getElementById('btn-saved')!.addEventListener('click', () => this.open('favorites'));
     document.getElementById('lib-close')!.addEventListener('click', () => this.dlg.close());
     this.dlg.addEventListener('click', e => { if (e.target === this.dlg) this.dlg.close(); });
     this.tabHist.addEventListener('click', () => this.setTab('history'));
@@ -57,7 +58,8 @@ export class Library {
 
   get isOpen(): boolean { return this.dlg.open; }
 
-  open(): void {
+  open(tab: Tab = this.tab): void {
+    this.tab = tab;
     this.render();
     if (!this.dlg.open) this.dlg.showModal();
   }
@@ -76,12 +78,12 @@ export class Library {
     this.list.setAttribute('aria-labelledby', hist ? 'tab-history' : 'tab-favs');
     const entries = hist ? this.hooks.getHistory() : this.hooks.getFavorites();
     this.clear.hidden = !hist;
-    this.sub.textContent = hist ? `Last ${entries.length} generated · newest first` : `${entries.length} saved`;
+    this.sub.textContent = hist ? `Last ${entries.length} generated, newest first` : `${entries.length} saved`;
     this.list.replaceChildren();
     if (!entries.length) {
       const li = document.createElement('li');
       li.className = 'lib-empty';
-      li.textContent = hist ? 'No licks yet. Generate one and it will show up here.' : 'No favorites yet. Press ☆ Favorite on a lick you like.';
+      li.textContent = hist ? 'No licks yet. Generate one and it will show up here.' : 'Nothing saved yet. Press Save on a lick you like.';
       this.list.appendChild(li);
       return;
     }
@@ -101,7 +103,7 @@ export class Library {
       const badge = document.createElement('span');
       badge.className = 'badge';
       badge.dataset.tier = String(lick.difficulty.tier);
-      badge.textContent = `${TIER_NAMES[lick.difficulty.tier]} · ${Math.round(lick.difficulty.score)}`;
+      badge.textContent = TIER_NAMES[lick.difficulty.tier];
       const rest = document.createElement('span');
       rest.textContent = `${keyLabel(lick.keyPc, lick.mode)} · ${LENGTHS[lick.length].label.replace(/ \(.*\)/, '')} · ${relativeTime(at, now)}`;
       l2.append(badge, rest);
@@ -113,8 +115,8 @@ export class Library {
         rm.type = 'button';
         rm.className = 'lib-rm';
         rm.dataset.remove = lick.id;
-        rm.title = 'Remove from favorites';
-        rm.setAttribute('aria-label', 'Remove from favorites');
+        rm.title = 'Remove from saved';
+        rm.setAttribute('aria-label', 'Remove from saved');
         rm.textContent = '✕';
         li.appendChild(rm);
       }

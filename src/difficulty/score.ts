@@ -1,0 +1,158 @@
+import type { DifficultyFeature, DifficultyResult, LickChord, LickNote, ProgressionDef, Tier } from '../types';
+import { ALTERED_RELS, inScale, isChordTone, isChordToneOrTension } from '../theory/chords';
+import { mod12 } from '../theory/pitch';
+
+/**
+ * Difficulty scoring (0..100) from the NOTES ONLY (tempo is not a factor).
+ *
+ * Each feature maps a measured value to 0..max points by a clamped linear ramp. The maxima
+ * sum to 100. Weights and thresholds were calibrated against the 55 prototype licks
+ * (tests/difficulty.test.ts): Beginner = quarter-note scales/arpeggios, Medium = steady 8ths,
+ * Advanced = 8ths with chromatic/altered colour. Tier 4 (Expert) needs what the prototype
+ * barely has: 16th-note runs, heavy chromaticism / altered tensions, big leaps, wide range.
+ */
+export const TIER_THRESHOLDS: [number, number, number] = [7, 15, 44];
+
+export const FEATURE_MAX = {
+  density: 20,
+  sixteenths: 14,
+  syncopation: 10,
+  offchord: 14,
+  chromatic: 14,
+  altered: 8,
+  leaps: 8,
+  range: 4,
+  harmony: 8,
+} as const;
+
+const ramp = (v: number, lo: number, hi: number): number => Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+
+export function tierForScore(score: number): Tier {
+  if (score < TIER_THRESHOLDS[0]) return 1;
+  if (score < TIER_THRESHOLDS[1]) return 2;
+  if (score < TIER_THRESHOLDS[2]) return 3;
+  return 4;
+}
+
+const r1 = (n: number) => Math.round(n * 10) / 10;
+
+function chordAt(chords: LickChord[], tick: number): LickChord {
+  for (let i = chords.length - 1; i >= 0; i--) if (tick >= chords[i].start) return chords[i];
+  return chords[0];
+}
+
+interface Attack { midi: number; start: number; dur: number; tied: boolean; crossesBeat: boolean }
+
+/** Merge tie chains into single sounding attacks. */
+function attacks(notes: LickNote[]): Attack[] {
+  const out: Attack[] = [];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    if (n.midi == null) continue;
+    let dur = n.dur;
+    let tied = false;
+    let j = i;
+    while (notes[j].tie && j + 1 < notes.length && notes[j + 1].midi === n.midi) {
+      j++;
+      dur += notes[j].dur;
+      tied = true;
+    }
+    i = j;
+    const end = n.start + dur;
+    out.push({
+      midi: n.midi, start: n.start, dur, tied,
+      crossesBeat: Math.floor((end - 1) / 4) > Math.floor(n.start / 4),
+    });
+  }
+  return out;
+}
+
+export function scoreLick(notes: LickNote[], chords: LickChord[], progression: ProgressionDef): DifficultyResult {
+  const att = attacks(notes);
+  const endTick = notes.reduce((m, n) => Math.max(m, n.start + n.dur), 0);
+  const beats = Math.max(1, endTick / 4);
+  const N = Math.max(1, att.length);
+
+  // density: attacks per beat
+  const density = att.length / beats;
+  // share of 16th-or-shorter attacks (merged durations)
+  const share16 = att.filter(a => a.dur <= 1).length / N;
+  // fraction of beats that contain 16th motion (runs, not isolated 16ths)
+  let runs16 = 0;
+  for (let i = 0; i + 1 < att.length; i++) if (att[i].dur <= 1 && att[i + 1].dur <= 1) runs16++;
+  const run16Share = runs16 / N;
+
+  // syncopation per beat
+  let sync = 0;
+  for (const a of att) {
+    const p = a.start % 4;
+    if (p === 2 && a.dur > 2 && a.crossesBeat) sync += 1; // held across the next beat from the "and"
+    else if (p === 1 || p === 3) sync += a.dur >= 2 ? 1 : 0.35; // off-16th, held or not
+    else if (p === 0 && a.dur === 3) sync += 0.2;
+    if (a.tied) sync += a.crossesBeat ? 0.6 : 0.3; // tie across beat or bar
+  }
+  const syncPerBeat = sync / beats;
+
+  // chromaticism and altered tensions relative to the sounding chord
+  let chroma = 0;
+  let nct = 0;
+  let altN = 0;
+  let domN = 0;
+  for (const a of att) {
+    const c = chordAt(chords, a.start);
+    const inside = inScale(a.midi, c.rootPc, c.quality) || isChordToneOrTension(a.midi, c.rootPc, c.quality);
+    if (!inside) chroma += 1;
+    if (!isChordTone(a.midi, c.rootPc, c.quality)) nct += 1;
+    if (c.quality === 'dom7' || c.quality === 'dom7alt') {
+      domN++;
+      if (ALTERED_RELS.includes(mod12(a.midi - c.rootPc))) altN++;
+    }
+  }
+  const chromaShare = chroma / N;
+  const nctShare = nct / N;
+  const altShare = domN ? altN / domN : 0;
+  // for altered chords the altered scale is "in scale", so count altered share over all attacks too
+  const altOfAll = altN / N;
+
+  // leaps
+  let sum = 0;
+  let max = 0;
+  let big = 0;
+  for (let i = 1; i < att.length; i++) {
+    const d = Math.abs(att[i].midi - att[i - 1].midi);
+    sum += d;
+    max = Math.max(max, d);
+    if (d > 7) big++;
+  }
+  const meanLeap = att.length > 1 ? sum / (att.length - 1) : 0;
+  const bigShare = att.length > 1 ? big / (att.length - 1) : 0;
+
+  const mids = att.map(a => a.midi);
+  const span = mids.length ? Math.max(...mids) - Math.min(...mids) : 0;
+
+  const F = FEATURE_MAX;
+  const features: DifficultyFeature[] = [
+    { id: 'density', label: 'Busy rhythm', value: r1(density), points: F.density * ramp(density, 0.9, 3.4) },
+    {
+      id: 'sixteenths', label: '16th-note runs', value: r1(share16 * 100),
+      points: F.sixteenths * (0.6 * ramp(share16, 0.0, 0.5) + 0.4 * ramp(run16Share, 0, 0.4)),
+    },
+    { id: 'syncopation', label: 'Syncopation', value: r1(syncPerBeat), points: F.syncopation * ramp(syncPerBeat, 0.05, 1.0) },
+    { id: 'offchord', label: 'Passing & extension tones', value: r1(nctShare * 100), points: F.offchord * ramp(nctShare, 0.05, 0.4) },
+    { id: 'chromatic', label: 'Chromatic notes', value: r1(chromaShare * 100), points: F.chromatic * ramp(chromaShare, 0.04, 0.35) },
+    {
+      id: 'altered', label: 'Altered tensions', value: r1(Math.max(altShare, altOfAll) * 100),
+      points: F.altered * ramp(altShare, 0.12, 0.6),
+    },
+    {
+      id: 'leaps', label: 'Wide leaps', value: max,
+      points: F.leaps * (0.4 * ramp(meanLeap, 2.6, 5.5) + 0.3 * ramp(max, 7, 14) + 0.3 * ramp(bigShare, 0, 0.2)),
+    },
+    { id: 'range', label: 'Wide range', value: span, points: F.range * ramp(span, 10, 26) },
+    { id: 'harmony', label: 'Advanced harmony', value: progression.complexity, points: F.harmony * progression.complexity },
+  ];
+  for (const f of features) f.points = r1(f.points);
+  features.sort((a, b) => b.points - a.points);
+  const score = Math.max(0, Math.min(100, r1(features.reduce((s, f) => s + f.points, 0))));
+  return { score, tier: tierForScore(score), features };
+}

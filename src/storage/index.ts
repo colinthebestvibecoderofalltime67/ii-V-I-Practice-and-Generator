@@ -1,0 +1,191 @@
+import type { Lick } from '../types';
+import { LENGTHS, PROGRESSIONS } from '../theory/progressions';
+import { INSTRUMENTS } from '../instruments';
+import type { CompStyle } from '../audio/comping';
+
+/** Persisted user settings. Everything here is a per-browser convenience. */
+export interface Settings {
+  progressionId: string;
+  length: keyof typeof LENGTHS;
+  tier: 1 | 2 | 3 | 4;
+  instrumentId: string;
+  /** 'random' or a concert pitch class 0..11. */
+  key: 'random' | number;
+  bpm: number;
+  slow: boolean;
+  piano: boolean;
+  loop: boolean;
+  swing: boolean;
+  hide: boolean;
+  showTab: boolean;
+  comp: CompStyle;
+  leadVolume: number;
+  pianoVolume: number;
+  countIn: boolean;
+  metronome: boolean;
+  midiBacking: boolean;
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  progressionId: 'major-251',
+  length: 'standard',
+  tier: 2,
+  instrumentId: 'alto',
+  key: 'random',
+  bpm: 120,
+  slow: false,
+  piano: true,
+  loop: false,
+  swing: true,
+  hide: false,
+  showTab: true,
+  comp: 'rootless',
+  leadVolume: 0.8,
+  pianoVolume: 0.6,
+  countIn: false,
+  metronome: false,
+  midiBacking: true,
+};
+
+export interface StoredEntry { lick: Lick; at: number }
+
+export const HISTORY_LIMIT = 50;
+export const FAVORITES_LIMIT = 500;
+
+export const KEYS = {
+  settings: 'iivi:v1:settings',
+  history: 'iivi:v1:history',
+  favorites: 'iivi:v1:favorites',
+} as const;
+
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** Shape check for a stored lick. Cheap but strict enough that rendering/playing cannot crash. */
+export function isValidLick(v: unknown): v is Lick {
+  if (!isObj(v)) return false;
+  if (v.version !== 1 || typeof v.id !== 'string' || !isNum(v.seed) || !isNum(v.keyPc) || !isNum(v.totalTicks)) return false;
+  if (!PROGRESSIONS.some(p => p.id === v.progressionId)) return false;
+  if (typeof v.length !== 'string' || !(v.length in LENGTHS)) return false;
+  if (v.mode !== 'major' && v.mode !== 'minor') return false;
+  if (![1, 2, 3, 4].includes(v.requestedTier as number)) return false;
+  if (!Array.isArray(v.chords) || v.chords.length === 0 || !Array.isArray(v.notes) || v.notes.length === 0) return false;
+  if (!Array.isArray(v.fragmentIds) || !isNum(v.createdAt)) return false;
+  for (const c of v.chords) {
+    if (!isObj(c) || !isNum(c.rootPc) || typeof c.quality !== 'string' || typeof c.symbol !== 'string' || !isNum(c.start) || !isNum(c.dur)) return false;
+  }
+  for (const n of v.notes) {
+    if (!isObj(n) || !(n.midi === null || isNum(n.midi)) || !isNum(n.start) || !isNum(n.dur) || !isNum(n.chord)) return false;
+    if (n.chord < 0 || n.chord >= v.chords.length) return false;
+  }
+  const d = v.difficulty;
+  if (!isObj(d) || !isNum(d.score) || ![1, 2, 3, 4].includes(d.tier as number) || !Array.isArray(d.features)) return false;
+  for (const f of d.features) {
+    if (!isObj(f) || typeof f.id !== 'string' || typeof f.label !== 'string' || !isNum(f.points)) return false;
+  }
+  return true;
+}
+
+export function sanitizeSettings(raw: unknown): Settings {
+  const s: Settings = { ...DEFAULT_SETTINGS };
+  if (!isObj(raw)) return s;
+  if (typeof raw.progressionId === 'string' && PROGRESSIONS.some(p => p.id === raw.progressionId)) s.progressionId = raw.progressionId;
+  if (typeof raw.length === 'string' && raw.length in LENGTHS) s.length = raw.length as Settings['length'];
+  if (isNum(raw.tier) && [1, 2, 3, 4].includes(raw.tier)) s.tier = raw.tier as Settings['tier'];
+  if (typeof raw.instrumentId === 'string' && INSTRUMENTS.some(i => i.id === raw.instrumentId)) s.instrumentId = raw.instrumentId;
+  if (raw.key === 'random') s.key = 'random';
+  else if (isNum(raw.key) && Number.isInteger(raw.key) && raw.key >= 0 && raw.key < 12) s.key = raw.key;
+  if (isNum(raw.bpm)) s.bpm = clamp(Math.round(raw.bpm), 40, 320);
+  if (isNum(raw.leadVolume)) s.leadVolume = clamp(raw.leadVolume, 0, 1);
+  if (isNum(raw.pianoVolume)) s.pianoVolume = clamp(raw.pianoVolume, 0, 1);
+  if (raw.comp === 'rootless' || raw.comp === 'block' || raw.comp === 'sparse') s.comp = raw.comp;
+  for (const k of ['slow', 'piano', 'loop', 'swing', 'hide', 'showTab', 'countIn', 'metronome', 'midiBacking'] as const) {
+    if (isBool(raw[k])) s[k] = raw[k];
+  }
+  return s;
+}
+
+/** Minimal slice of the Storage interface we rely on. */
+export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+function defaultBackend(): StorageLike | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Facade over versioned localStorage. Never throws; behaves as an empty store when storage is blocked. */
+export class Store {
+  private backend: StorageLike | null;
+  constructor(backend?: StorageLike | null) {
+    this.backend = backend === undefined ? defaultBackend() : backend;
+  }
+
+  private read(key: string): unknown {
+    try {
+      const raw = this.backend?.getItem(key);
+      return raw == null ? undefined : JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private write(key: string, value: unknown): boolean {
+    try {
+      if (!this.backend) return false;
+      this.backend.setItem(key, JSON.stringify(value));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private readEntries(key: string, limit: number): StoredEntry[] {
+    const raw = this.read(key);
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<string>();
+    const out: StoredEntry[] = [];
+    for (const e of raw) {
+      if (!isObj(e) || !isNum(e.at) || !isValidLick(e.lick) || seen.has(e.lick.id)) continue;
+      seen.add(e.lick.id);
+      out.push({ lick: e.lick, at: e.at });
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /* settings */
+  loadSettings(): Settings { return sanitizeSettings(this.read(KEYS.settings)); }
+  saveSettings(s: Settings): void { this.write(KEYS.settings, s); }
+
+  /* history: newest first */
+  loadHistory(): StoredEntry[] { return this.readEntries(KEYS.history, HISTORY_LIMIT); }
+  addHistory(lick: Lick, at = Date.now()): StoredEntry[] {
+    const list = [{ lick, at }, ...this.loadHistory().filter(e => e.lick.id !== lick.id)].slice(0, HISTORY_LIMIT);
+    this.write(KEYS.history, list);
+    return list;
+  }
+  removeHistory(id: string): StoredEntry[] {
+    const list = this.loadHistory().filter(e => e.lick.id !== id);
+    this.write(KEYS.history, list);
+    return list;
+  }
+  clearHistory(): void { this.write(KEYS.history, []); }
+
+  /* favorites: newest first */
+  loadFavorites(): StoredEntry[] { return this.readEntries(KEYS.favorites, FAVORITES_LIMIT); }
+  addFavorite(lick: Lick, at = Date.now()): StoredEntry[] {
+    const list = [{ lick, at }, ...this.loadFavorites().filter(e => e.lick.id !== lick.id)].slice(0, FAVORITES_LIMIT);
+    this.write(KEYS.favorites, list);
+    return list;
+  }
+  removeFavorite(id: string): StoredEntry[] {
+    const list = this.loadFavorites().filter(e => e.lick.id !== id);
+    this.write(KEYS.favorites, list);
+    return list;
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "ii-v-i-lick-generator",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "mine": "tsx scripts/mine-prototype.ts",
+    "report": "tsx scripts/report.ts"
+  },
+  "dependencies": {
+    "jspdf": "^4.2.1",
+    "svg2pdf.js": "^2.9.0",
+    "vexflow": "^4.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  }
+}

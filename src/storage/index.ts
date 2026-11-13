@@ -17,6 +17,7 @@ export interface Settings {
   piano: boolean;
   loop: boolean;
   swing: boolean;
+  straight16: boolean;
   hide: boolean;
   showTab: boolean;
   comp: CompStyle;
@@ -42,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
   piano: true,
   loop: false,
   swing: true,
+  straight16: true,
   hide: false,
   showTab: true,
   comp: 'rootless',
@@ -131,7 +133,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (isNum(raw.pianoVolume)) s.pianoVolume = clamp(raw.pianoVolume, 0, 1);
   if (raw.comp === 'rootless' || raw.comp === 'block' || raw.comp === 'sparse') s.comp = raw.comp;
   if (typeof raw.tabPosition === 'string' && (raw.tabPosition === 'auto' || TAB_POSITION_RE.test(raw.tabPosition))) s.tabPosition = raw.tabPosition;
-  for (const k of ['slow', 'piano', 'loop', 'swing', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking'] as const) {
+  for (const k of ['slow', 'piano', 'loop', 'swing', 'straight16', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking'] as const) {
     if (isBool(raw[k])) s[k] = raw[k];
   }
   return s;

@@ -111,6 +111,9 @@ function syncControls(): void {
   } else hint.hidden = true;
 
   check('c-swing', settings.swing);
+  check('c-straight16', settings.straight16);
+  $<HTMLInputElement>('c-straight16').disabled = !settings.swing;
+  $('straight16-wrap').setAttribute('aria-disabled', String(!settings.swing));
   check('c-piano', settings.piano);
   check('c-loop', settings.loop);
   check('c-hide', settings.hide);
@@ -318,7 +321,7 @@ const PROGRAMS: Record<Instrument['timbre'], number> = { reed: 66, brass: 56, fl
 
 function playOptions(): PlayOptions {
   return {
-    bpm: effectiveBpm(), swing: settings.swing, loop: settings.loop, metronome: settings.metronome,
+    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, loop: settings.loop, metronome: settings.metronome,
     countIn: settings.countIn, piano: settings.piano, comp: settings.comp,
     leadVolume: settings.leadVolume, pianoVolume: settings.pianoVolume, timbre: inst().timbre,
   };
@@ -366,7 +369,7 @@ function exportStatus(text: string, clearAfter = 0): void {
 function doMidi(): void {
   if (!lick) return;
   const bytes = lickToMidi(lick, {
-    bpm: effectiveBpm(), swing: settings.swing, comping: settings.midiBacking, comp: settings.comp,
+    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, comping: settings.midiBacking, comp: settings.comp,
     program: PROGRAMS[inst().timbre],
   });
   downloadBlob(new Blob([bytes as BlobPart], { type: 'audio/midi' }), fileName(lick, 'mid'));
@@ -483,6 +486,7 @@ function bind(): void {
   onCheck('c-piano', on => { setting('piano', on); restartIfPlaying(); });
   onCheck('c-loop', on => { setting('loop', on); restartIfPlaying(); });
   onCheck('c-swing', on => { setting('swing', on); restartIfPlaying(); });
+  onCheck('c-straight16', on => { setting('straight16', on); restartIfPlaying(); });
   onCheck('c-hide', on => { setting('hide', on); if (!on) renderNotation(); });
   onCheck('c-tab', on => { setting('showTab', on); renderNotation(); });
   onCheck('c-fingers', on => { setting('showFingers', on); renderNotation(); });

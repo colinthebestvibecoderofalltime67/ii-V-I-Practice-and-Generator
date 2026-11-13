@@ -2,10 +2,11 @@ import type { Lick, Timbre } from '../types';
 import { TICKS_PER_16TH, TPB } from '../types';
 import { bassEvents, compEvents, type CompStyle } from './comping';
 import { bass, click, lead, piano } from './synth';
-import { soundingNotes, spanBeats, tickToBeats } from './timing';
+import { findTupletGroups } from '../theory/rhythm';
+import { makeTimeline, soundingNotes, timelineSpan } from './timing';
 
 export interface PlayOptions {
-  bpm: number; swing: boolean; loop: boolean; metronome: boolean; countIn: boolean;
+  bpm: number; swing: boolean; straight16: boolean; loop: boolean; metronome: boolean; countIn: boolean;
   piano: boolean; comp: CompStyle; leadVolume: number; pianoVolume: number; timbre: Timbre;
 }
 export interface PlayCallbacks { onNote?(indices: number[]): void; onStatus?(text: string): void; onEnd?(): void }
@@ -75,7 +76,8 @@ export class Player {
     const compEv = opts.piano ? compEvents(lick.chords, opts.comp) : [];
     const bassEv = opts.piano ? bassEvents(lick.chords) : [];
     const beats = lick.totalTicks / TPB;
-    const sw = opts.swing;
+    const tl = makeTimeline(lick.notes, { swing: opts.swing, straight16: opts.straight16 });
+    const groups = findTupletGroups(lick.notes).groups;
 
     const pass = (st: number): void => {
       if (session !== this.session || !this.buses) return;
@@ -83,23 +85,29 @@ export class Player {
       this.later(st, () => cb.onStatus?.(`${bpm} BPM`));
       lick.notes.forEach((n, i) => {
         const idx = n.midi == null ? [] : byFirst.get(i) ?? [i];
-        this.later(st + tickToBeats(n.start, sw) * spb, () => cb.onNote?.(idx));
+        this.later(st + tl(n.start) * spb, () => cb.onNote?.(idx));
       });
       for (const s of sounds) {
-        const t = st + tickToBeats(s.start, sw) * spb;
-        const art = s.dur === TICKS_PER_16TH ? 0.78 : s.dur <= 3 * TICKS_PER_16TH ? 0.9 : 0.97;
-        const dur = spanBeats(s.start, s.dur, sw) * spb * art;
-        lead(ctx, buses.lead, opts.timbre, s.midi, t, dur, s.start % (2 * TICKS_PER_16TH) ? 0.75 : 1); // 16ths off the 8th get a softer accent
+        const t = st + tl(s.start) * spb;
+        const g = groups.find(x => s.start >= x.start && s.start < x.end);
+        let art = s.dur === TICKS_PER_16TH ? 0.78 : s.dur <= 3 * TICKS_PER_16TH ? 0.9 : 0.97;
+        let accent = s.start % (2 * TICKS_PER_16TH) ? 0.75 : 1; // 16ths off the 8th get a softer accent
+        if (g) { // triplet notes: shorter in faster groups, first note of the group accented
+          art = g.kind === 't16' ? 0.8 : g.kind === 't8' ? 0.9 : 0.95;
+          accent = s.start === g.start ? 1 : 0.82;
+        }
+        const dur = timelineSpan(tl, s.start, s.dur) * spb * art;
+        lead(ctx, buses.lead, opts.timbre, s.midi, t, dur, accent);
       }
       if (opts.metronome) for (let j = 0; j < beats; j++) click(ctx, buses.met, st + j * spb, j % 4 === 0);
       for (const e of compEv) {
-        const t = st + tickToBeats(e.tick, sw) * spb;
-        const d = spanBeats(e.tick, e.dur, sw) * spb;
+        const t = st + tl(e.tick) * spb;
+        const d = timelineSpan(tl, e.tick, e.dur) * spb;
         e.midi.forEach(m => piano(ctx, buses.piano, m, t, d, 0.13));
       }
       for (const e of bassEv) {
-        const t = st + tickToBeats(e.tick, sw) * spb;
-        const d = spanBeats(e.tick, e.dur, sw) * spb * 0.92;
+        const t = st + tl(e.tick) * spb;
+        const d = timelineSpan(tl, e.tick, e.dur) * spb * 0.92;
         e.midi.forEach(m => bass(ctx, buses.piano, m, t, d, 0.3));
       }
       // schedule the next pass (or the end) shortly before this one finishes

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadPrototypeLicks } from '../scripts/legacy';
 import type { LickNote } from '../src/types';
 import { TICKS_PER_16TH as S, TPBAR } from '../src/types';
-import { TIER_THRESHOLDS, scoreLick, tierForScore } from '../src/difficulty/score';
+import { SCORE_CEIL, TIER_POS, TIER_THRESHOLDS, posToScore, scoreLick, scoreToPos, tierForScore } from '../src/difficulty/score';
 import { expandProgression, getProgression } from '../src/theory/progressions';
 
 const prog = getProgression('major-251');
@@ -126,5 +126,25 @@ describe('scoreLick extremes', () => {
     const sc = scoreLick(sync, chords, prog).features.find(f => f.id === 'syncopation')!.points;
     const st = scoreLick(straight, chords, prog).features.find(f => f.id === 'syncopation')!.points;
     expect(sc).toBeGreaterThan(st);
+  });
+});
+
+describe('slider mapping', () => {
+  it('is monotonic, hits the tier boundaries and inverts', () => {
+    expect(posToScore(0)).toBe(0);
+    expect(posToScore(100)).toBe(SCORE_CEIL);
+    TIER_POS.forEach((p, i) => expect(posToScore(p)).toBeCloseTo(TIER_THRESHOLDS[i], 9));
+    let prev = -1;
+    for (let p = 0; p <= 100; p++) {
+      const s = posToScore(p);
+      expect(s).toBeGreaterThan(prev);
+      prev = s;
+      expect(scoreToPos(s)).toBeCloseTo(p, 9);
+      if (p % 25 !== 0) expect(tierForScore(s)).toBe(p < 25 ? 1 : p < 50 ? 2 : p < 75 ? 3 : 4);
+    }
+    expect(posToScore(-5)).toBe(0);
+    expect(posToScore(150)).toBe(SCORE_CEIL);
+    expect(scoreToPos(-3)).toBe(0);
+    expect(scoreToPos(500)).toBe(100);
   });
 });

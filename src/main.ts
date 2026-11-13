@@ -5,7 +5,8 @@ import { barOf } from './theory/rhythm';
 import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
 import { INSTRUMENTS, concertRange, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
-import { FEATURE_MAX } from './difficulty/score';
+import { FEATURE_MAX, posToScore, scoreToPos, tierForScore } from './difficulty/score';
+import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
 import { renderLick } from './render/notation';
 import { lickFingerings } from './render/tab';
 import { Player, type PlayOptions } from './audio/player';
@@ -31,10 +32,12 @@ const player = new Player();
 const inst = (): Instrument => getInstrument(settings.instrumentId);
 const persist = (): void => store.saveSettings(settings);
 const effectiveBpm = (): number => (settings.slow ? Math.round(settings.bpm * 0.6) : settings.bpm);
-const TIERS: Tier[] = [1, 2, 3, 4];
+const targetTier = (): Tier => tierForScore(posToScore(settings.target));
 
 /** Highlight colour on the (always white) notation sheet. */
 const SHEET_ACCENT = '#2747C9';
+/** Note-label colours on the (always white) sheet; the panel legend uses the --k-* CSS tokens, same hues. */
+const KIND_COLOR: Record<NoteKind, string> = { chord: '#1C1C1A', tension: '#2747C9', scale: '#6E6D67', chromatic: '#9A3B8F' };
 const CHORD_FONT = { family: "Geist, system-ui, sans-serif", weight: '600' };
 
 /** Short names for the sidebar list; the full name is used everywhere else. */
@@ -74,8 +77,6 @@ function radio(name: string, value: string, html: string): HTMLLabelElement {
 function buildStaticControls(): void {
   $('prog-list').replaceChildren(...PROGRESSIONS.map(p =>
     radio('prog', p.id, `<span>${SHORT_NAME[p.id] ?? p.name}</span><span class="roman">${romansFor(p.id).join(' ')}</span>`)));
-  $('tier-list').replaceChildren(...TIERS.map(t =>
-    radio('tier', String(t), `<span>${TIER_NAMES[t]}<span class="desc">${TIER_DESC[t]}</span></span>`)));
   $('len-list').replaceChildren(...(Object.keys(LENGTHS) as (keyof typeof LENGTHS)[]).map(id =>
     radio('len', id, `<span>${lengthShort(id)}</span>`)));
   $<HTMLSelectElement>('sel-inst').innerHTML = INSTRUMENTS.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
@@ -99,15 +100,16 @@ function syncControls(): void {
   const prog = getProgression(settings.progressionId);
   const i = inst();
   setRadio('prog', settings.progressionId);
-  setRadio('tier', String(settings.tier));
+  syncTarget();
+  $('t-analyze').setAttribute('aria-pressed', String(settings.analyze));
   setRadio('len', settings.length);
   $<HTMLSelectElement>('sel-inst').value = settings.instrumentId;
   $<HTMLSelectElement>('sel-key').value = String(settings.key);
   $('prog-desc').textContent = prog.description;
   const hint = $('tier-hint');
-  if (settings.tier < prog.minTier) {
+  if (targetTier() < prog.minTier) {
     hint.hidden = false;
-    hint.textContent = `${prog.name} is usually ${TIER_NAMES[prog.minTier]} material, so ${TIER_NAMES[settings.tier]} licks here will be very simple.`;
+    hint.textContent = `${prog.name} is usually ${TIER_NAMES[prog.minTier]} material, so ${TIER_NAMES[targetTier()]} licks here will be very simple.`;
   } else hint.hidden = true;
 
   check('c-swing', settings.swing);
@@ -135,6 +137,61 @@ function syncControls(): void {
   $('cover').setAttribute('aria-hidden', String(!settings.hide));
   updateTransport();
   updateFav();
+}
+
+/* ---------------------------------------------------------------- difficulty slider */
+
+function syncTarget(): void {
+  const tier = targetTier();
+  const score = Math.round(posToScore(settings.target));
+  const r = $<HTMLInputElement>('r-target');
+  r.value = String(settings.target);
+  r.style.setProperty('--pos', String(settings.target / 100));
+  r.setAttribute('aria-valuetext', `${TIER_NAMES[tier]}, score ${score}`);
+  $('target-tier').textContent = TIER_NAMES[tier];
+  $('target-score').textContent = `· aims for ${score} / 100`;
+  $('target-desc').textContent = TIER_DESC[tier];
+}
+
+/* ---------------------------------------------------------------- analysis */
+
+let analysisFor: { lick: Lick; inst: Instrument; result: LickAnalysis } | null = null;
+
+function currentAnalysis(): LickAnalysis | null {
+  if (!lick) return null;
+  const i = inst();
+  if (!analysisFor || analysisFor.lick !== lick || analysisFor.inst !== i) analysisFor = { lick, inst: i, result: analyzeLick(lick, i) };
+  return analysisFor.result;
+}
+
+function renderAnalysis(): void {
+  const panel = $('analysis');
+  const a = settings.analyze ? currentAnalysis() : null;
+  panel.hidden = !a;
+  if (!a) return;
+  $('an-rows').replaceChildren(...a.chords.map(c => {
+    const row = document.createElement('div');
+    row.className = 'an-row';
+    const mk = (cls: string, text: string): HTMLElement => {
+      const e = document.createElement('span');
+      e.className = cls;
+      e.textContent = text;
+      return e;
+    };
+    const notes = mk('an-notes', '');
+    notes.append(...c.scaleNotes.map(n => mk('', n)));
+    notes.setAttribute('aria-label', 'Scale notes: ' + c.scaleNotes.join(' '));
+    row.append(mk('an-sym', c.symbol), mk('an-rom', c.roman), mk('an-scale', c.scaleName + ' scale'), notes);
+    return row;
+  }));
+}
+
+function setAnalyze(on: boolean): void {
+  settings.analyze = on;
+  persist();
+  syncControls();
+  renderAnalysis();
+  renderNotation();
 }
 
 /* ---------------------------------------------------------------- tab positions */
@@ -186,6 +243,7 @@ function renderNotation(): void {
     chordFont: CHORD_FONT,
     romans: romansFor(lick.progressionId),
     activeBar: activeBar(),
+    noteLabels: settings.analyze ? currentAnalysis()?.notes.map(n => (n ? { text: n.label, color: KIND_COLOR[n.kind] } : null)) : undefined,
   });
 }
 
@@ -201,7 +259,8 @@ function renderMeta(): void {
   const who = isTransposing(i) ? `${instShort(i)}, written in ${writtenKeyLabel(lick, i)}` : instShort(i);
   const meta = $('lick-meta');
   meta.replaceChildren(`${who} · ${lengthShort(lick.length)} · `);
-  if (d.tier === lick.requestedTier) meta.append(`${TIER_NAMES[d.tier]}, as requested`);
+  if (lick.targetScore !== undefined) meta.append(`aimed for ${Math.round(lick.targetScore)} · scored ${Math.round(d.score)}`);
+  else if (d.tier === lick.requestedTier) meta.append(`${TIER_NAMES[d.tier]}, as requested`);
   else {
     const s = document.createElement('span');
     s.className = 'asked';
@@ -212,9 +271,13 @@ function renderMeta(): void {
   $('tier-name').textContent = TIER_NAMES[d.tier];
   const score = Math.round(d.score);
   $('tier-score').textContent = `${score} / 100`;
-  const pct = Math.max(0, Math.min(100, d.score));
+  const pct = scoreToPos(d.score);
   $('scale-fill').style.width = `${pct}%`;
   $('scale-mark').style.left = `calc(${pct}% - 1px)`;
+  const tgt = $('scale-target');
+  tgt.hidden = lick.targetScore === undefined;
+  $('scale-key').hidden = tgt.hidden;
+  if (lick.targetScore !== undefined) tgt.style.left = `${scoreToPos(lick.targetScore)}%`;
   $('feat-cap').textContent = `What makes it ${TIER_NAMES[d.tier]}`;
 
   const max = FEATURE_MAX as Record<string, number>;
@@ -277,6 +340,7 @@ function showLick(l: Lick, record: boolean, replaceId?: string): void {
   }
   fillKeyOptions();
   renderMeta();
+  renderAnalysis();
   syncPositions();
   renderNotation();
   updateTransport();
@@ -290,7 +354,8 @@ function generate(): void {
     progressionId: settings.progressionId,
     length: settings.length,
     keyPc,
-    tier: settings.tier,
+    tier: targetTier(),
+    targetScore: posToScore(settings.target),
     range: concertRange(inst()),
     seed: randomSeed(),
   });
@@ -454,7 +519,9 @@ function bind(): void {
   $('btn-gen').addEventListener('click', generate);
 
   onRadio('prog', v => { settings.progressionId = v; persist(); fillKeyOptions(); syncControls(); });
-  onRadio('tier', v => setting('tier', Number(v) as Tier));
+  const target = $<HTMLInputElement>('r-target');
+  target.addEventListener('input', () => { settings.target = Math.round(Number(target.value)); persist(); syncControls(); });
+  $('t-analyze').addEventListener('click', () => setAnalyze(!settings.analyze));
   onRadio('len', v => setting('length', v as Settings['length']));
   $<HTMLSelectElement>('sel-inst').addEventListener('change', e => {
     settings.instrumentId = (e.target as HTMLSelectElement).value;
@@ -527,6 +594,8 @@ function bind(): void {
       togglePlay();
     } else if (e.key === 'g' || e.key === 'G') {
       generate();
+    } else if (e.key === 'a' || e.key === 'A') {
+      setAnalyze(!settings.analyze);
     }
   });
 

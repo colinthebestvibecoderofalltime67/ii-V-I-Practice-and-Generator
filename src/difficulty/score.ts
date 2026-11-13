@@ -36,6 +36,32 @@ export function tierForScore(score: number): Tier {
   return 4;
 }
 
+/**
+ * Practical maximum score: the 95th percentile of 360 Expert licks (all progressions, lengths,
+ * four instruments, seeds 1..360) was 57.4, rounded up. The slider's top end maps here.
+ */
+export const SCORE_CEIL = 58;
+
+/** Slider positions (0..100) of the boundaries between tiers 1|2, 2|3, 3|4: each tier gets a quarter of the travel. */
+export const TIER_POS: [number, number, number] = [25, 50, 75];
+
+const KNOTS_SCORE = [0, ...TIER_THRESHOLDS, SCORE_CEIL];
+const KNOTS_POS = [0, ...TIER_POS, 100];
+
+function piecewise(x: number, from: number[], to: number[]): number {
+  if (!(x > from[0])) return to[0];
+  for (let i = 1; i < from.length; i++) {
+    if (x <= from[i]) return to[i - 1] + ((x - from[i - 1]) / (from[i] - from[i - 1])) * (to[i] - to[i - 1]);
+  }
+  return to[to.length - 1];
+}
+
+/** Slider position 0..100 -> target difficulty score (piecewise linear, tier boundaries at 25/50/75). */
+export const posToScore = (pos: number): number => piecewise(pos, KNOTS_POS, KNOTS_SCORE);
+
+/** Difficulty score -> slider position 0..100 (inverse of posToScore, clamped). */
+export const scoreToPos = (score: number): number => piecewise(score, KNOTS_SCORE, KNOTS_POS);
+
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
 function chordAt(chords: LickChord[], tick: number): LickChord {

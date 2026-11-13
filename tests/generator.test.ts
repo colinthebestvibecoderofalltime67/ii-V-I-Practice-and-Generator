@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FRAGMENTS } from '../src/fragments';
 import { INSTRUMENTS, concertRange, getInstrument } from '../src/instruments';
 import { generateLick, transposeLick } from '../src/generator';
-import { scoreLick } from '../src/difficulty/score';
+import { posToScore, scoreLick, tierForScore } from '../src/difficulty/score';
 import { isChordToneOrTension, CHORDS } from '../src/theory/chords';
 import { LENGTHS, PROGRESSIONS, expandProgression, getProgression } from '../src/theory/progressions';
 import { mod12 } from '../src/theory/pitch';
@@ -163,5 +163,48 @@ describe('transposeLick', () => {
         checkInvariants(t, range2, `${p.id} -> key ${key}`);
       }
     }
+  });
+});
+
+describe('targetScore (difficulty slider)', () => {
+  const POSITIONS = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95];
+  const median = (a: number[]) => [...a].sort((x, y) => x - y)[a.length >> 1];
+
+  it('lands near the target across the slider, keeps invariants and the target tier', () => {
+    let tierHit = 0;
+    let total = 0;
+    const all: number[] = [];
+    for (const pos of POSITIONS) {
+      const target = posToScore(pos);
+      const errs: number[] = [];
+      let seed = 100 + pos;
+      for (const p of PROGRESSIONS) {
+        for (const length of LENGTH_IDS) {
+          for (let k = 0; k < 2; k++) {
+            const instId = INSTS[k];
+            const range = concertRange(getInstrument(instId));
+            const lick = generateLick({ progressionId: p.id, length, keyPc: KEYS[instId], tier: 1, targetScore: target, range, seed: seed++ });
+            checkInvariants(lick, range, `${p.id}/${length}/pos${pos}`);
+            expect(lick.targetScore).toBe(target);
+            expect(lick.requestedTier).toBe(tierForScore(target));
+            errs.push(Math.abs(lick.difficulty.score - target));
+            if (lick.difficulty.tier === tierForScore(target)) tierHit++;
+            total++;
+          }
+        }
+      }
+      all.push(...errs);
+      // very low targets are bounded below by the simplest possible licks (about 3 points)
+      expect(median(errs), `median error at pos ${pos}`).toBeLessThanOrEqual(pos < 10 ? 2.5 : 1.2);
+    }
+    expect(median(all)).toBeLessThanOrEqual(0.8);
+    expect(tierHit / total, 'target tier hit rate').toBeGreaterThanOrEqual(0.85);
+  }, 120_000);
+
+  it('without targetScore the lick has none and options.tier still rules', () => {
+    const range = concertRange(getInstrument('alto'));
+    const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 3, range, seed: 4 });
+    expect(l.targetScore).toBeUndefined();
+    expect(l.requestedTier).toBe(3);
   });
 });

@@ -1,10 +1,11 @@
 import type { ChordQualityId, Fragment, LengthId, Lick, LickChord, LickNote, Tier } from '../types';
-import { RENDERABLE_DURS } from '../types';
+import { RENDERABLE_DURS, TPB } from '../types';
 import { FRAGMENTS } from '../fragments';
 import { CHORDS } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
+import { findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm';
 import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
-import { TIER_THRESHOLDS, scoreLick } from '../difficulty/score';
+import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, scoreToPos, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
 import { type Ev, eventsToNotes, fixJoins, leapPenalty } from './connect';
 
@@ -13,6 +14,11 @@ export interface GenerateOptions {
   length: LengthId;
   keyPc: number;
   tier: Tier;
+  /**
+   * Optional exact difficulty score (0..100) to aim for, e.g. posToScore(sliderPosition). When given,
+   * `tier` is ignored: the tier is tierForScore(targetScore) and the candidate closest to the score wins.
+   */
+  targetScore?: number;
   /** CONCERT comfortable range (use concertRange(inst)). */
   range: [number, number];
   /** default: random */
@@ -28,17 +34,27 @@ const MAX_ROUNDS = 3;
 
 const RENDERABLE = new Set<number>(RENDERABLE_DURS);
 
-/** A fragment is usable only if its durations fill its beats exactly and ties are consistent. */
-function isValidFragment(f: Fragment): boolean {
+/**
+ * A fragment is usable only if its durations fill its beats exactly, ties are consistent and triplets are well formed:
+ *  - every non-triplet duration is renderable; triplet durations (not multiples of a 16th) must form valid groups
+ *    (findTupletGroups: exact span, aligned start, units of 1 or 2) -- fragments start on a beat, and 4-beat
+ *    fragments on a bar line, so group alignment inside the fragment equals alignment in the lick;
+ *  - no tie into, out of or inside a triplet group (v1 keeps triplets tie-free).
+ */
+export function isValidFragment(f: Fragment): boolean {
   if (!f.notes.length) return false;
   let sum = 0;
+  const timed: { start: number; dur: number }[] = [];
   for (let i = 0; i < f.notes.length; i++) {
     const n = f.notes[i];
-    if (!RENDERABLE.has(n.dur)) return false;
+    if (!isTupletDur(n.dur) && !RENDERABLE.has(n.dur)) return false;
+    if (isTupletDur(n.dur) && (n.tie || (i > 0 && f.notes[i - 1].tie))) return false;
+    timed.push({ start: sum, dur: n.dur });
     sum += n.dur;
     if (n.tie && (n.rel == null || i + 1 >= f.notes.length || f.notes[i + 1].rel !== n.rel)) return false;
   }
-  return sum === f.beats * 4 && f.notes.some(n => n.rel != null);
+  if (sum !== f.beats * TPB || !f.notes.some(n => n.rel != null)) return false;
+  return findTupletGroups(timed).errors.length === 0;
 }
 
 /** Simple guide-tone / arpeggio fragment, used only when the library has nothing for a combination. */
@@ -49,12 +65,12 @@ function synthFragment(q: ChordQualityId, beats: 2 | 4, ending: boolean): Fragme
     const g = c.guide[0];
     return {
       id, qualities: [q], beats, tags: ['guide-tone'], level: 1, ending: true, source: 'original',
-      notes: beats === 4 ? [{ rel: g, dur: 12 }, { rel: null, dur: 4 }] : [{ rel: g, dur: 6 }, { rel: null, dur: 2 }],
+      notes: beats === 4 ? [{ rel: g, dur: 3 * TPB }, { rel: null, dur: TPB }] : [{ rel: g, dur: TPB + TPB / 2 }, { rel: null, dur: TPB / 2 }],
     };
   }
   const tones = [...c.tones].sort((a, b) => a - b);
   const count = beats === 4 ? 4 : 4;
-  const dur = beats === 4 ? 4 : 2;
+  const dur = beats === 4 ? TPB : TPB / 2;
   const notes = Array.from({ length: count }, (_, i) => {
     const k = i + 1; // start on the third
     return { rel: tones[k % tones.length] + 12 * Math.floor(k / tones.length), dur };
@@ -94,6 +110,49 @@ interface PlanItem {
 
 const LEVEL_WEIGHT = [1, 0.3, 0.06, 0.02];
 
+/**
+ * Triplet fragments are a flavour, not the default texture. Their weight is scaled per requested tier:
+ * never for Beginner, freely at Intermediate (where only simple 8th-triplet arpeggios and the odd enclosure exist),
+ * damped at Advanced/Expert where many more fragments (and the triplet-scoring) compete. 16th-triplets are Expert only.
+ * Fragments without triplets are untouched (factor 1), so pools without triplets draw exactly as before.
+ */
+const TRIPLET_FACTOR: Record<Tier, number> = { 1: 0, 2: 1, 3: 0.22, 4: 0.12 };
+const tripletKinds = new WeakMap<Fragment, Set<TupletKind>>();
+function fragTripletKinds(f: Fragment): Set<TupletKind> {
+  let k = tripletKinds.get(f);
+  if (!k) {
+    let t = 0;
+    k = new Set(findTupletGroups(f.notes.map(n => { const r = { start: t, dur: n.dur }; t += n.dur; return r; })).groups.map(g => g.kind));
+    tripletKinds.set(f, k);
+  }
+  return k;
+}
+function tripletFactor(f: Fragment, level: number): number {
+  const kinds = fragTripletKinds(f);
+  if (!kinds.size) return 1;
+  if (kinds.has('t16') && level < 4) return 0;
+  return lerpTable(TRIPLET_FACTOR_BY_LEVEL, level - 1);
+}
+const TRIPLET_FACTOR_BY_LEVEL = [TRIPLET_FACTOR[1], TRIPLET_FACTOR[2], TRIPLET_FACTOR[3], TRIPLET_FACTOR[4]];
+
+/** Linear interpolation into a table at a fractional index (clamped). Integer indexes return table entries exactly. */
+function lerpTable(t: readonly number[], x: number): number {
+  if (x <= 0) return t[0];
+  if (x >= t.length - 1) return t[t.length - 1];
+  const i = Math.floor(x);
+  const f = x - i;
+  return f === 0 ? t[i] : t[i] + (t[i + 1] - t[i]) * f;
+}
+
+/**
+ * Fractional fragment level aimed at for a slider target: the middle of each tier's quarter of slider travel
+ * maps to that tier's integer level (pos 12.5 -> 1, 37.5 -> 2, 62.5 -> 3, 87.5 -> 4), so targets near a tier
+ * boundary blend the neighbouring levels instead of jumping.
+ */
+export function levelForTarget(score: number): number {
+  return Math.min(4, Math.max(1, 0.5 + scoreToPos(score) / 25));
+}
+
 /** Split a slot's beats into 2/4-beat pieces. 4-beat pieces only start on a bar line. */
 function partitionSlot(rng: Rng, slotBeats: number, startBeat: number, endingPiece: 2 | 4 | null): number[] {
   const tail = endingPiece ?? 0;
@@ -119,7 +178,7 @@ function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
 }
 
 function buildPlan(
-  rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, tier: Tier, sharp: number,
+  rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number,
 ): PlanItem[] {
   const plan: PlanItem[] = [];
   let beat = 0;
@@ -138,14 +197,15 @@ function buildPlan(
       const ending = isLastSlot && pi === parts.length - 1;
       const pool = pools.get(q, b as 2 | 4, ending);
       const frag = rng.weighted(pool, f => {
-        let w = Math.pow(LEVEL_WEIGHT[Math.min(3, Math.abs(f.level - tier))], sharp);
+        let w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
+        w *= tripletFactor(f, level);
         if (f.id === prevId) w *= 0.15;
         if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
         return w;
       });
       prevId = frag.id;
       plan.push({ frag, chordIdx: ci, start: tick });
-      tick += b * 4;
+      tick += b * TPB;
       beat += b;
     });
   });
@@ -289,7 +349,17 @@ function tierDistance(score: number, tier: Tier): number {
   return 0;
 }
 
+/** How close (in score points) a candidate must be to a target score to stop searching. */
+function scoreTolerance(tier: Tier): number {
+  const lo = tier === 1 ? 0 : TIER_THRESHOLDS[tier - 2];
+  const hi = tier === 4 ? SCORE_CEIL : TIER_THRESHOLDS[tier - 1];
+  return Math.max(2, 0.12 * (hi - lo));
+}
+
 export function generateLick(opts: GenerateOptions): Lick {
+  const target = opts.targetScore !== undefined && Number.isFinite(opts.targetScore) ? opts.targetScore : undefined;
+  const reqTier: Tier = target !== undefined ? tierForScore(target) : opts.tier;
+  const tol = target !== undefined ? scoreTolerance(reqTier) : 0;
   const def = getProgression(opts.progressionId);
   const seed = (opts.seed ?? randomSeed()) >>> 0;
   const keyPc = mod12(opts.keyPc);
@@ -300,19 +370,30 @@ export function generateLick(opts: GenerateOptions): Lick {
   const rng = new Rng(seed);
 
   let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number } | null = null;
+  // Without a target the level is the tier (integer, exactly the original weighting). With a target it starts at
+  // the target's fractional level and is nudged each round toward where the candidates actually scored.
+  let level = target !== undefined ? levelForTarget(target) : reqTier;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const sharp = 1 + round * 0.8;
+    const roundScores: number[] = [];
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, opts.tier, sharp);
+      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp);
       const octaves = chooseOctaves(plan, chords, opts.range);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range);
       const notes = eventsToNotes(events, chords);
       const cost = lickCost(events, fragStarts, opts.range, fixes);
-      const dist = tierDistance(scoreLick(notes, chords, def).score, opts.tier);
+      const score = scoreLick(notes, chords, def).score;
+      roundScores.push(score);
+      const dist = target !== undefined ? Math.abs(score - target) : tierDistance(score, reqTier);
       if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist };
     }
-    if (best && best.dist === 0) break;
+    if (best && best.dist <= tol) break;
+    if (target !== undefined) {
+      const mid = [...roundScores].sort((a, b) => a - b)[roundScores.length >> 1];
+      if (mid > target + tol) level = Math.max(1, level - 0.4);
+      else if (mid < target - tol) level = Math.min(4, level + 0.4);
+    }
   }
   const b = best!;
   // Sanity: contiguity (guards against malformed custom fragments; never expected to trigger)
@@ -320,14 +401,15 @@ export function generateLick(opts: GenerateOptions): Lick {
   if (end !== totalTicks) throw new Error(`generator produced ${end} ticks, expected ${totalTicks}`);
 
   return {
-    version: 1,
-    id: makeId(def.id, opts.length, keyPc, opts.tier, seed),
+    version: 2,
+    id: makeId(def.id, opts.length, keyPc, reqTier, seed),
     seed,
     progressionId: def.id,
     length: opts.length,
     keyPc,
     mode: def.mode,
-    requestedTier: opts.tier,
+    requestedTier: reqTier,
+    ...(target !== undefined ? { targetScore: target } : {}),
     chords,
     notes: b.notes,
     totalTicks,

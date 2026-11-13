@@ -1,5 +1,6 @@
 import { CHORDS } from '../theory/chords';
 import type { LickChord } from '../types';
+import { TICKS_PER_16TH as S16, TPB, TPBAR } from '../types';
 
 export type CompStyle = 'rootless' | 'block' | 'sparse';
 export interface CompEvent { midi: number[]; tick: number; dur: number }
@@ -62,12 +63,13 @@ export function compEvents(chords: LickChord[], style: CompStyle): CompEvent[] {
       ev.push({ midi: v, tick: c.start, dur: c.dur });
     } else if (last) {
       ev.push({ midi: v, tick: c.start, dur: c.dur });
-    } else if (c.dur < 16) {
-      ev.push({ midi: v, tick: c.start, dur: Math.max(1, Math.min(c.dur, 6)) });
+    } else if (c.dur < TPBAR) {
+      ev.push({ midi: v, tick: c.start, dur: Math.max(S16, Math.min(c.dur, 6 * S16)) });
     } else {
-      for (let t = 0; t + 16 <= c.dur; t += 16) {
-        ev.push({ midi: v, tick: c.start + t, dur: 6 });
-        ev.push({ midi: v, tick: c.start + t + 6, dur: 6 });
+      for (let t = 0; t + TPBAR <= c.dur; t += TPBAR) {
+        // Charleston: dotted quarter on 1, then the "and" of 2
+        ev.push({ midi: v, tick: c.start + t, dur: 6 * S16 });
+        ev.push({ midi: v, tick: c.start + t + 6 * S16, dur: 6 * S16 });
       }
     }
   });
@@ -93,7 +95,7 @@ export function bassEvents(chords: LickChord[]): CompEvent[] {
   chords.forEach((c, i) => {
     const root = roots[i];
     const last = i === chords.length - 1;
-    const beats = Math.max(1, Math.round(c.dur / 4));
+    const beats = Math.max(1, Math.round(c.dur / TPB));
     if (last) {
       ev.push({ midi: [root], tick: c.start, dur: c.dur });
       return;
@@ -112,7 +114,7 @@ export function bassEvents(chords: LickChord[]): CompEvent[] {
         m = nearestPc(c.rootPc + order[(b - 1) % order.length], prev, BASS_LO, BASS_HI);
         if (m === prev) m = nearestPc(c.rootPc + tones[2], prev + 1, BASS_LO, BASS_HI);
       }
-      ev.push({ midi: [m], tick: c.start + b * 4, dur: 4 });
+      ev.push({ midi: [m], tick: c.start + b * TPB, dur: TPB });
       prev = m;
     }
   });

@@ -14,13 +14,14 @@
  * String numbering follows VexFlow: 1 = HIGHEST string. `tuning` is listed low string first.
  */
 import type { Instrument, Lick } from '../types';
+import { TICKS_PER_16TH, TPB } from '../types';
 
 export interface FretPos {
   str: number;
   fret: number;
 }
 
-/** A note of a line. `start`/`dur` are ticks (16ths); without them the index is used as the start. */
+/** A note of a line. `start`/`dur` are ticks (TPB = 12 per beat); without them each index is one 16th (3 ticks) long, starting at index * 3. */
 export interface LineNote {
   midi: number | null;
   start?: number;
@@ -136,8 +137,8 @@ const isBassTuning = (tuning: number[]) => tuning.length <= 4 && tuning[0] < 45;
 
 function normalize(input: LineInput): LineNote[] {
   return input.map((x, i) => {
-    if (x == null || typeof x === 'number') return { midi: x ?? null, start: i, dur: 1 };
-    return { midi: x.midi, start: x.start ?? i, dur: x.dur ?? 1 };
+    if (x == null || typeof x === 'number') return { midi: x ?? null, start: i * TICKS_PER_16TH, dur: TICKS_PER_16TH };
+    return { midi: x.midi, start: x.start ?? i * TICKS_PER_16TH, dur: x.dur ?? TICKS_PER_16TH };
   });
 }
 
@@ -230,15 +231,15 @@ function transCost(a: State, b: State, cx: Ctx, k: Costs): number {
     let m = 1;
     if (cx.boundary) m *= AT_CELL_JOIN;
     if (cx.restBefore) m *= AFTER_REST;
-    else if (cx.prevDur >= 4) m *= AFTER_LONG;
-    else if (cx.prevDur === 3) m *= AFTER_DOTTED8;
+    else if (cx.prevDur >= TPB) m *= AFTER_LONG;
+    else if (cx.prevDur === 3 * TICKS_PER_16TH) m *= AFTER_DOTTED8;
     if (a.fret === 0 || b.fret === 0) m *= VIA_OPEN;
     else if (a.str === b.str && a.finger === b.finger) {
       const df = Math.abs(a.fret - b.fret);
       if (df === 1) m *= HALF_STEP_SLIDE;
       else if (df === 2) m *= WHOLE_STEP_SLIDE;
     }
-    if (cx.start % 4 === 0) m *= ON_BEAT;
+    if (cx.start % TPB === 0) m *= ON_BEAT;
     c += (k.shiftBase + d * k.shiftPerFret + Math.max(0, d - 5) * k.bigShift) * Math.max(MIN_DISCOUNT, m);
   }
   if (a.fret > 0 && b.fret > 0 && a.finger === b.finger && a.str !== b.str) {

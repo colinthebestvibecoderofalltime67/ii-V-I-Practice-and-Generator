@@ -3,3 +3,6 @@ dist
 .vercel
 test-results
 screenshots
+
+# Claude Code agent worktrees
+.claude/worktrees/

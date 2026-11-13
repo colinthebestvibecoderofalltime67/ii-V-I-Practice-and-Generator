@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { FRAGMENTS } from '../src/fragments';
 import { INSTRUMENTS, concertRange, getInstrument } from '../src/instruments';
 import { generateLick, transposeLick } from '../src/generator';
-import { scoreLick } from '../src/difficulty/score';
+import { posToScore, scoreLick, tierForScore } from '../src/difficulty/score';
 import { isChordToneOrTension, CHORDS } from '../src/theory/chords';
 import { LENGTHS, PROGRESSIONS, expandProgression, getProgression } from '../src/theory/progressions';
 import { mod12 } from '../src/theory/pitch';
-import { RENDERABLE_DURS, type Lick, type LengthId, type Tier } from '../src/types';
+import { findTupletGroups, isTupletDur } from '../src/theory/rhythm';
+import { RENDERABLE_DURS, TICKS_PER_16TH, TPB, TPBAR, type Lick, type LengthId, type Tier } from '../src/types';
 
 const INSTS = ['alto', 'trumpet', 'trombone', 'bass'];
 const SEEDS = 12;
@@ -21,13 +22,19 @@ const RANGE_TOL = 0;
 function checkInvariants(lick: Lick, range: [number, number], label: string) {
   const def = getProgression(lick.progressionId);
   expect(lick.chords, label).toEqual(expandProgression(def, lick.length, lick.keyPc));
-  const total = LENGTHS[lick.length].beats.reduce((a, b) => a + b, 0) * 4;
+  const total = LENGTHS[lick.length].beats.reduce((a, b) => a + b, 0) * TPB;
   expect(lick.totalTicks, label).toBe(total);
   let t = 0;
   lick.notes.forEach((n, i) => {
     expect(n.start, `${label} contiguous #${i}`).toBe(t);
-    expect((RENDERABLE_DURS as readonly number[]).includes(n.dur), `${label} dur ${n.dur}`).toBe(true);
-    expect(Math.floor(n.start / 16), `${label} bar line at note ${i}`).toBe(Math.floor((n.start + n.dur - 1) / 16));
+    // non-triplet durations are renderable and on the 16th grid; triplet durations are checked as groups below
+    if (!isTupletDur(n.dur)) {
+      expect((RENDERABLE_DURS as readonly number[]).includes(n.dur), `${label} dur ${n.dur}`).toBe(true);
+      expect(n.start % TICKS_PER_16TH, `${label} on the 16th grid #${i}`).toBe(0);
+    } else {
+      expect(n.tie, `${label} triplet note #${i} is tied`).toBeFalsy();
+    }
+    expect(Math.floor(n.start / TPBAR), `${label} bar line at note ${i}`).toBe(Math.floor((n.start + n.dur - 1) / TPBAR));
     const ci = lick.chords.findIndex(c => n.start >= c.start && n.start < c.start + c.dur);
     expect(n.chord, `${label} chord idx #${i}`).toBe(ci);
     if (n.tie) {
@@ -43,6 +50,11 @@ function checkInvariants(lick: Lick, range: [number, number], label: string) {
     t += n.dur;
   });
   expect(t, label).toBe(total);
+
+  // triplets: well-formed, aligned groups that never cross a bar line
+  const tg = findTupletGroups(lick.notes);
+  expect(tg.errors, `${label} triplet groups`).toEqual([]);
+  for (const g of tg.groups) expect(Math.floor(g.start / TPBAR), `${label} ${g.kind} group at ${g.start} crosses a bar`).toBe(Math.floor((g.end - 1) / TPBAR));
 
   // downbeat rule: the note sounding at each chord start is a chord tone or tension
   lick.chords.forEach((c, ci) => {
@@ -146,7 +158,10 @@ describe('determinism and options', () => {
 describe('transposeLick', () => {
   it('preserves rhythm and intervals, respells chords and keeps difficulty', () => {
     for (const p of PROGRESSIONS) {
-      const range = concertRange(getInstrument('alto'));
+      // generate inside a 20-semitone window: a transposition (fixed pitch class shift, octave free) is then guaranteed
+      // to fit the full trumpet range, so the strict range invariant below does not depend on which fragments were drawn
+      const full = concertRange(getInstrument('alto'));
+      const range: [number, number] = [full[0] + 4, full[0] + 24];
       const lick = generateLick({ progressionId: p.id, length: 'standard', keyPc: 0, tier: 3, range, seed: 11 });
       for (const key of [1, 6, 7, 10]) {
         const range2 = concertRange(getInstrument('trumpet'));
@@ -162,5 +177,52 @@ describe('transposeLick', () => {
         checkInvariants(t, range2, `${p.id} -> key ${key}`);
       }
     }
+  });
+});
+
+describe('targetScore (difficulty slider)', () => {
+  const POSITIONS = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95];
+  const median = (a: number[]) => [...a].sort((x, y) => x - y)[a.length >> 1];
+
+  it('lands near the target across the slider, keeps invariants and the target tier', () => {
+    let tierHit = 0;
+    let total = 0;
+    const all: number[] = [];
+    for (const pos of POSITIONS) {
+      const target = posToScore(pos);
+      const errs: number[] = [];
+      let seed = 100 + pos;
+      for (const p of PROGRESSIONS) {
+        for (const length of LENGTH_IDS) {
+          for (let k = 0; k < 2; k++) {
+            const instId = INSTS[k];
+            const range = concertRange(getInstrument(instId));
+            const lick = generateLick({ progressionId: p.id, length, keyPc: KEYS[instId], tier: 1, targetScore: target, range, seed: seed++ });
+            checkInvariants(lick, range, `${p.id}/${length}/pos${pos}`);
+            expect(lick.targetScore).toBe(target);
+            expect(lick.requestedTier).toBe(tierForScore(target));
+            errs.push(Math.abs(lick.difficulty.score - target));
+            if (lick.difficulty.tier === tierForScore(target)) tierHit++;
+            total++;
+          }
+        }
+      }
+      all.push(...errs);
+      // very low targets are bounded below by the simplest possible licks (about 3 points)
+      expect(median(errs), `median error at pos ${pos}`).toBeLessThanOrEqual(pos < 10 ? 2.5 : 1.2);
+      if (pos >= 10) {
+        const p90 = [...errs].sort((a, b) => a - b)[Math.floor(errs.length * 0.9)];
+        expect(p90, `p90 error at pos ${pos}`).toBeLessThanOrEqual(3);
+      }
+    }
+    expect(median(all)).toBeLessThanOrEqual(0.8);
+    expect(tierHit / total, 'target tier hit rate').toBeGreaterThanOrEqual(0.85);
+  }, 120_000);
+
+  it('without targetScore the lick has none and options.tier still rules', () => {
+    const range = concertRange(getInstrument('alto'));
+    const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 3, range, seed: 4 });
+    expect(l.targetScore).toBeUndefined();
+    expect(l.requestedTier).toBe(3);
   });
 });

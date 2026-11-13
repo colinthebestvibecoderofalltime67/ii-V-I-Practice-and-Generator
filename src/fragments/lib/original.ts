@@ -1,4 +1,5 @@
 import type { ChordQualityId, FragNote, FragTag, Fragment, Tier } from '../../types';
+import { parseNotes } from './notation';
 
 /**
  * Hand-written original fragment library (no transcribed solos).
@@ -8,14 +9,7 @@ import type { ChordQualityId, FragNote, FragTag, Fragment, Tier } from '../../ty
  *   A trailing "~" ties the note to the next one (which repeats the same rel).
  * Strong-beat rule: attacks on tick 0 and tick 8 are chord tones or listed tensions of every claimed quality.
  */
-const parse = (s: string): FragNote[] =>
-  s.trim().split(/\s+/).map(tok => {
-    const tie = tok.endsWith('~');
-    const [r, d] = (tie ? tok.slice(0, -1) : tok).split(':');
-    const n: FragNote = { rel: r === 'r' ? null : Number(r), dur: Number(d) };
-    if (tie) n.tie = true;
-    return n;
-  });
+const parse = (s: string): FragNote[] => parseNotes(s, 1); // durations stay in 16ths; scaled by fromSixteenths
 
 type Q = ChordQualityId;
 const o = (id: string, qualities: Q[], beats: 2 | 4, level: Tier, tags: FragTag[], notes: string, ending = false): Fragment => {

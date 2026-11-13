@@ -4,16 +4,16 @@ A static Vite + TypeScript site with no backend. The music core in `src/` (every
 
 ## Conventions (read first)
 - **Shared types:** in `src/types.ts`. Don't change them without coordinating.
-- **Time:** positions and durations are in **ticks = sixteenth notes**. 4 ticks make a beat and 16 make a 4/4 bar. Only these durations are drawable as one note: `RENDERABLE_DURS = [1,2,3,4,6,8,12,16]`.
+- **Time:** positions and durations are integer **ticks on a 12-per-beat grid** (`TPB = 12`, `TPBAR = 48`, `TICKS_PER_16TH = 3` in `src/types.ts`), so triplets also land on whole ticks. 16th = 3, 8th = 6, dotted 8th = 9, quarter = 12, dotted quarter = 18, half = 24, dotted half = 36, whole = 48. Only these durations are drawable as one note: `RENDERABLE_DURS = [3,6,9,12,18,24,36,48]`. `TRIPLET_DURS = [2,4,8]` (16th-, 8th- and quarter-triplet) is exported for the upcoming triplet work and is not used yet. Use the constants, never raw tick literals. `splitDur`, `beatOf` and `barOf` live in `src/theory/rhythm.ts` and are shared by the generator and the notation renderer (`splitDur` throws if a duration cannot be expressed).
 - **Pitch:** lick pitches are **concert MIDI**. Written pitch = concert + `instrument.transpose`.
 - **Tied notes:** a `LickNote` with `tie: true` is tied to the next note, which has the same midi. Playback merges tied notes into one sound.
-- **Bar lines:** a lick note never crosses a bar line (multiples of 16 ticks). Every chord start tick has a note or rest starting on it.
+- **Bar lines:** a lick note never crosses a bar line (multiples of `TPBAR` = 48 ticks). Every chord start tick has a note or rest starting on it.
 - **Chord tones and tensions:** `src/theory/chords.ts` has `isChordTone`, `isChordToneOrTension`, `inScale` and `ALTERED_RELS`.
 - **Spelling:** `src/theory/pitch.ts` has `keyUsesSharps`, `pcName`, `chordRootName`, `vexKey` and `keySignatureName`.
 - **Progressions:** `src/theory/progressions.ts` has `PROGRESSIONS`, `LENGTHS` (short = 2+2+4 beats, standard = 4+4+4, long = 8+8+8), `expandProgression` and `getProgression`.
 - **Instruments:** `src/instruments.ts` has `INSTRUMENTS`, `getInstrument` and `concertRange`.
-- **Fragments:** `src/fragments/index.ts` exports `FRAGMENTS` and `fragmentsFor(quality, beats?)`. Fragment pitches (`rel`) are semitones from the chord root. Fragment durations are in ticks.
-- **Legacy licks:** `scripts/legacy.ts` provides `loadPrototypeLicks()` (Node only). It returns the 55 prototype licks in C, already converted to ticks.
+- **Fragments:** `src/fragments/index.ts` exports `FRAGMENTS` and `fragmentsFor(quality, beats?)`. Fragment pitches (`rel`) are semitones from the chord root. Fragments are **authored in sixteenth-note units** (1 = 16th, 4 = quarter) in `src/fragments/lib/*`; `fromSixteenths` multiplies every duration by `AUTHORED_UNIT` (3) on load, so `FRAGMENTS` and `fragmentsFor` already use engine ticks. Do not edit the library files to the new grid. `scripts/mine-prototype.ts` therefore works and emits in 16ths and keeps its own 16th-based split.
+- **Legacy licks:** `scripts/legacy.ts` provides `loadPrototypeLicks()` (Node only). It returns the 55 prototype licks in C, already converted to engine ticks.
 
 ## Module contracts
 
@@ -46,7 +46,13 @@ export interface RenderOptions {
   activeBar?: number; activeBarColor?: string;   // faint tint behind the bar being played (ignored in print)
   tabPosition?: 'auto' | number;                 // tab fingering: index into lickFingerings(...).positions
   showFingers?: boolean;                         // finger numbers on every tab note (else only at shifts)
+  noteLabels?: ({ text: string; color?: string } | null | undefined)[]; // per lick note, drawn in a row under the staff (above the tab)
 }
+// Triplets: pieces in a triplet group keep their real tick duration, are written at tupletDisplayDur and get a VexFlow
+// Tuplet(3:2) (beamed 8th/16th groups show only the "3"; quarter triplets and groups with rests get a bracket). Triplet
+// groups beam on their own; other notes beam per beat and never join a triplet. buildPieces() is exported and pure.
+// Tab ("Tab. full"): TabNotes with stems/beams/tuplets BELOW the tab staff; rests are StaveNote rests drawn on the tab
+// stave; tied continuations keep the stem but show no fret number.
 export function renderLick(container: HTMLElement, lick: Lick, inst: Instrument, opts?: RenderOptions): SVGSVGElement | null;
 // src/render/tab.ts (pure)
 export function assignFrets(written: (number | null)[], tuning: number[], frets: number): ({ str: number; fret: number } | null)[];
@@ -84,11 +90,14 @@ export class Player {
 // midi.ts (pure)
 export function lickToMidi(lick: Lick, opts: { bpm: number; swing: boolean; comping: boolean; comp: CompStyle }): Uint8Array;
 // pdf.ts (browser)
-export async function exportPdf(lick: Lick, inst: Instrument): Promise<void>;  // triggers download
+export async function exportPdf(lick: Lick, inst: Instrument,
+  opts?: Pick<RenderOptions, 'showTab' | 'tabPosition' | 'showFingers' | 'noteLabels'>): Promise<void>;  // triggers download
+// Same renderer as on screen (print mode). showTab defaults to !!inst.tab only when the caller passes none,
+// so the user's "Show tab" setting is honoured.
 ```
 
 ### Storage: `src/storage/`
-Versioned localStorage holding settings, favorites and history. Licks are stored as full `Lick` JSON. Every access is wrapped in try/catch.
+Versioned localStorage holding settings, favorites and history. Licks are stored as full `Lick` JSON. `Lick.version` is `2` (12 ticks per beat); version `1` licks (16th-note ticks, 4 per beat) are still accepted by `isValidLick` and are converted by `migrateLick` (every tick value times 3) whenever history or favorites are loaded, so the rest of the app only sees version 2. Every access is wrapped in try/catch.
 
 ## Adding a progression
 1. Add an entry to `PROGRESSIONS` in `src/theory/progressions.ts`.

@@ -1,12 +1,15 @@
 import {
-  Accidental, Barline, Beam, Dot, Formatter, Fraction, GhostNote, Renderer, Stave, StaveConnector, StaveNote,
-  StaveTie, TabNote, TabStave, Voice,
+  Accidental, Barline, Beam, Dot, Formatter, Fraction, Renderer, Stave, StaveConnector, StaveNote,
+  StaveTie, TabNote, TabStave, Tuplet, Voice,
 } from 'vexflow';
 import type { Instrument, Lick } from '../types';
-import { RENDERABLE_DURS } from '../types';
+import { TPBAR } from '../types';
+import { barOf, findTupletGroups, isTupletDur, splitDur, tupletDisplayDur, type TupletKind } from '../theory/rhythm';
 import { CHORDS } from '../theory/chords';
 import { chordRootName, keySignatureName, keyUsesSharps, mod12, vexKey } from '../theory/pitch';
 import { type FingeredNote, lickFingerings, pickFingering, roman } from './tab';
+
+export interface NoteLabel { text: string; color?: string }
 
 export interface RenderOptions {
   highlight?: number[];
@@ -16,6 +19,11 @@ export interface RenderOptions {
   tabPosition?: 'auto' | number;
   /** Show a suggested finger above every fretted tab note (otherwise only where the hand shifts). */
   showFingers?: boolean;
+  /**
+   * Optional text label per lick note (index into lick.notes; null/undefined = none), drawn in a row under the
+   * standard staff. Used by Analyze for chord degrees. (Implementation: see notation renderer.)
+   */
+  noteLabels?: (NoteLabel | null | undefined)[];
   /** Colour for highlighted (now-playing) notes. Default: burnt orange. */
   highlightColor?: string;
   /** Chord-symbol font. Default: Georgia bold. */
@@ -34,25 +42,37 @@ const CHORD_SIZE = 19;
 const ROMAN_FONT = "'Geist Mono', ui-monospace, monospace";
 const ROMAN_SIZE = 12;
 const DUR_NAME: Record<number, [string, number]> = {
-  1: ['16', 0], 2: ['8', 0], 3: ['8', 1], 4: ['q', 0], 6: ['q', 1], 8: ['h', 0], 12: ['h', 1], 16: ['w', 0],
+  3: ['16', 0], 6: ['8', 0], 9: ['8', 1], 12: ['q', 0], 18: ['q', 1], 24: ['h', 0], 36: ['h', 1], 48: ['w', 0],
 };
 const MAX_BARS_PER_LINE = 4;
 const MARGIN = 10;
 
+/** Tuplet membership of a piece (index of the group within its bar). */
+export interface PieceTup { group: number; kind: TupletKind }
+
 /** One drawable note/rest (a lick note may become several tied pieces). */
-interface Piece {
+export interface Piece {
   noteIdx: number;
   start: number;
+  /** Real duration in ticks (triplet notes keep their 2/4/8-tick value). */
   dur: number;
+  /** Written duration in ticks (differs from dur only inside triplet groups). */
+  disp: number;
+  tup?: PieceTup;
   midi: number | null; // written
   tieNext: boolean;
   cont: boolean; // continuation of a tied chain (tab shows only the first)
 }
 
+interface TupGroup { kind: TupletKind; idx: number[] }
+
 interface Bar {
   pieces: Piece[];
   notes: StaveNote[];
-  tabNotes: (TabNote | GhostNote)[];
+  tabNotes: StaveNote[];
+  groups: TupGroup[];
+  tuplets: Tuplet[];
+  tabTuplets: Tuplet[];
   voice: Voice;
   tabVoice?: Voice;
   formatter: Formatter;
@@ -61,20 +81,8 @@ interface Bar {
   chordPiece: number[]; // piece index per chordIdx (-1 if none)
 }
 
-/** Split a duration into renderable pieces, greedy largest first. */
-function splitDur(dur: number): number[] {
-  const out: number[] = [];
-  let left = dur;
-  const sorted = [...RENDERABLE_DURS].sort((a, b) => b - a);
-  while (left > 0) {
-    const d = sorted.find(x => x <= left) ?? 1;
-    out.push(d);
-    left -= d;
-  }
-  return out;
-}
-
-function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
+/** Split a lick into per-bar drawable pieces (pure; exported for tests). Triplet notes are never split or tied. */
+export function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
   const bars: Piece[][] = Array.from({ length: nBars }, () => []);
   const notes = lick.notes.map((n, i) => ({ n, i })).sort((a, b) => a.n.start - b.n.start);
   for (const { n, i } of notes) {
@@ -82,22 +90,25 @@ function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
     let pos = n.start;
     const end = n.start + n.dur;
     const segs: { start: number; dur: number }[] = [];
-    while (pos < end) {
-      const barEnd = (Math.floor(pos / 16) + 1) * 16;
-      const segEnd = Math.min(end, barEnd);
-      let p = pos;
-      for (const d of splitDur(segEnd - pos)) {
-        segs.push({ start: p, dur: d });
-        p += d;
+    if (isTupletDur(n.dur)) segs.push({ start: pos, dur: n.dur });
+    else {
+      while (pos < end) {
+        const barEnd = (barOf(pos) + 1) * TPBAR;
+        const segEnd = Math.min(end, barEnd);
+        let p = pos;
+        for (const d of splitDur(segEnd - pos)) {
+          segs.push({ start: p, dur: d });
+          p += d;
+        }
+        pos = segEnd;
       }
-      pos = segEnd;
     }
     segs.forEach((s, k) => {
-      const bar = Math.floor(s.start / 16);
+      const bar = barOf(s.start);
       if (bar >= nBars) return;
       const isLast = k === segs.length - 1;
       bars[bar].push({
-        noteIdx: i, start: s.start, dur: s.dur, midi,
+        noteIdx: i, start: s.start, dur: s.dur, disp: s.dur, midi,
         tieNext: midi != null && (isLast ? !!n.tie : true),
         cont: false,
       });
@@ -105,15 +116,30 @@ function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
   }
   // mark continuations & fill gaps with rests (defensive)
   const flat: Piece[] = [];
+  const rest = (t: number, d: number): Piece => ({ noteIdx: -1, start: t, dur: d, disp: d, midi: null, tieNext: false, cont: false });
+  const fillGap = (filled: Piece[], t: number, to: number): number => {
+    const gap = to - t;
+    for (const d of isTupletDur(gap) ? [gap] : splitDur(gap)) { filled.push(rest(t, d)); t += d; }
+    return t;
+  };
   bars.forEach((pcs, b) => {
-    let t = b * 16;
+    let t = b * TPBAR;
     const filled: Piece[] = [];
     for (const p of pcs) {
-      if (p.start > t) for (const d of splitDur(p.start - t)) { filled.push({ noteIdx: -1, start: t, dur: d, midi: null, tieNext: false, cont: false }); t += d; }
+      if (p.start > t) t = fillGap(filled, t, p.start);
       filled.push(p);
       t = Math.max(t, p.start + p.dur);
     }
-    if (t < (b + 1) * 16) for (const d of splitDur((b + 1) * 16 - t)) { filled.push({ noteIdx: -1, start: t, dur: d, midi: null, tieNext: false, cont: false }); t += d; }
+    if (t < (b + 1) * TPBAR) fillGap(filled, t, (b + 1) * TPBAR);
+    // triplet groups: written duration + group membership
+    const { groups } = findTupletGroups(filled);
+    groups.forEach((g, gi) => {
+      for (let k = g.first; k <= g.last; k++) {
+        filled[k].disp = tupletDisplayDur(filled[k].dur);
+        filled[k].tup = { group: gi, kind: g.kind };
+        filled[k].tieNext = false;
+      }
+    });
     bars[b] = filled;
     flat.push(...filled);
   });
@@ -126,7 +152,7 @@ function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
 }
 
 function makeNote(p: Piece, clef: 'treble' | 'bass', sharps: boolean): StaveNote {
-  const [d, dots] = DUR_NAME[p.dur] ?? ['q', 0];
+  const [d, dots] = DUR_NAME[p.disp] ?? ['q', 0];
   let n: StaveNote;
   if (p.midi == null) {
     n = new StaveNote({ keys: [clef === 'bass' ? 'd/3' : 'b/4'], duration: d + 'd'.repeat(dots) + 'r', clef });
@@ -137,16 +163,62 @@ function makeNote(p: Piece, clef: 'treble' | 'bass', sharps: boolean): StaveNote
   return n;
 }
 
-function makeTabNote(p: Piece, pos: FingeredNote | null): TabNote | GhostNote {
-  const [d, dots] = DUR_NAME[p.dur] ?? ['q', 0];
-  if (p.midi == null || p.cont || !pos) {
-    const g = new GhostNote({ duration: d + 'd'.repeat(dots) });
-    if (dots) Dot.buildAndAttach([g as unknown as StaveNote], { all: true });
-    return g;
+/**
+ * Full-tab note ("Tab. full"): stems down. Notes are TabNotes with stems (tied continuations keep the stem but
+ * show no fret number); rests are ordinary rest StaveNotes drawn on the tab staff (GhostNote draws nothing).
+ */
+function makeTabNote(p: Piece, pos: FingeredNote | null): StaveNote {
+  const [d, dots] = DUR_NAME[p.disp] ?? ['q', 0];
+  let n: StaveNote;
+  if (p.midi == null || !pos) {
+    n = new StaveNote({ keys: ['b/4'], duration: d + 'd'.repeat(dots) + 'r', clef: 'treble' });
+    if (dots) Dot.buildAndAttach([n], { all: true });
+    return n;
   }
-  const t = new TabNote({ positions: [{ str: pos.str, fret: pos.fret }], duration: d + 'd'.repeat(dots) });
-  if (dots) Dot.buildAndAttach([t as unknown as StaveNote], { all: true });
-  return t;
+  const t = new TabNote({ positions: [{ str: pos.str, fret: p.cont ? '' : pos.fret }], duration: d + 'd'.repeat(dots) }, true);
+  t.setStemDirection(-1);
+  return t as unknown as StaveNote;
+}
+
+/**
+ * Augmentation dots on full-tab notes. VexFlow's TabNote dots land unreliably (often hidden by the tab lines),
+ * so draw them by hand: just right of the stem, in the gap between the tab staff and the beams.
+ */
+function drawTabDots(ctx: ReturnType<Renderer['getContext']>, notes: StaveNote[], pcs: Piece[], color: string): void {
+  notes.forEach((n, i) => {
+    if (n.isRest() || !(DUR_NAME[pcs[i].disp]?.[1] > 0)) return;
+    const tn = n as unknown as TabNote;
+    let ext: { topY: number; baseY: number };
+    try { ext = tn.getStemExtents(); } catch { return; }
+    const x = tn.getStemX() + 5;
+    const y = Math.min(ext.topY, ext.baseY) + 7;
+    ctx.save();
+    ctx.setFillStyle(color);
+    ctx.beginPath();
+    ctx.arc(x, y, 1.7, 0, Math.PI * 2, false);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+/** Beams for one bar: triplet groups beam as their own unit; the rest beams per beat and never joins a triplet. */
+function makeBeams(notes: StaveNote[], pcs: Piece[], groups: TupGroup[]): Beam[] {
+  const opt = { groups: [new Fraction(1, 4)], beam_rests: false };
+  if (!groups.length) return Beam.generateBeams(notes, opt);
+  const beams: Beam[] = [];
+  for (const g of groups) {
+    if (g.kind !== 'tq') beams.push(...Beam.generateBeams(g.idx.map(k => notes[k]), opt));
+  }
+  let seg: StaveNote[] = [];
+  let segBeat = -1;
+  const flush = (): void => { if (seg.length > 1) beams.push(...Beam.generateBeams(seg, opt)); seg = []; };
+  pcs.forEach((p, k) => {
+    const beat = Math.floor((p.start % TPBAR) / 12);
+    if (p.tup || beat !== segBeat) { flush(); segBeat = beat; }
+    if (!p.tup) seg.push(notes[k]);
+  });
+  flush();
+  return beams;
 }
 
 function errorDiv(container: HTMLElement, err: unknown): null {
@@ -184,7 +256,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const writtenKey = mod12(lick.keyPc + inst.transpose);
   const sharps = keyUsesSharps(writtenKey, lick.mode);
   const keySig = keySignatureName(writtenKey, lick.mode);
-  const nBars = Math.max(1, Math.ceil(lick.totalTicks / 16));
+  const nBars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
   const showTab = !!(opts.showTab && inst.tab);
   const tab = inst.tab;
 
@@ -227,23 +299,47 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   }
 
   let pi = 0;
+  let headPos: FingeredNote | null = null; // fingering of the current tied chain (tab shows stems on continuations)
+  const hasTuplets = flatPieces.some(p => p.tup);
+  const labels = opts.noteLabels ?? [];
+  const hasLabels = labels.some(l => l && l.text);
   const bars: Bar[] = pieceBars.map((pcs, b) => {
     const notes = pcs.map(p => makeNote(p, clef, sharps));
     pcs.forEach((p, k) => {
       if (hl.has(p.noteIdx)) notes[k].setStyle({ fillStyle: HL, strokeStyle: HL });
     });
+    const groups: TupGroup[] = [];
+    pcs.forEach((p, k) => {
+      if (!p.tup) return;
+      (groups[p.tup.group] ??= { kind: p.tup.kind, idx: [] }).idx.push(k);
+    });
+    const mkTuplet = (ns: StaveNote[], g: TupGroup, bottom: boolean): Tuplet => {
+      const items = g.idx.map(k => ns[k]);
+      // beamed 8th/16th groups (no rests, nothing longer than an 8th written) show only the "3"
+      const beamed = g.kind !== 'tq' && g.idx.every(k => pcs[k].midi != null && pcs[k].disp <= 6);
+      return new Tuplet(items, {
+        num_notes: 3, notes_occupied: 2, bracketed: !beamed, ratioed: false,
+        location: bottom ? Tuplet.LOCATION_BOTTOM : Tuplet.LOCATION_TOP,
+      });
+    };
+    const tuplets = groups.map(g => mkTuplet(notes, g, false));
     const voice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(false).addTickables(notes);
     Accidental.applyAccidentals([voice], keySig);
     const formatter = new Formatter().joinVoices([voice]);
-    let tabNotes: (TabNote | GhostNote)[] = [];
+    let tabNotes: StaveNote[] = [];
+    let tabTuplets: Tuplet[] = [];
     let tabVoice: Voice | undefined;
     const base = pi;
     if (showTab) {
       tabNotes = pcs.map((p, k) => {
-        const tn = makeTabNote(p, tabPos?.get(base + k) ?? null);
-        if (hl.has(p.noteIdx) && tn instanceof TabNote) tn.setStyle({ fillStyle: HL, strokeStyle: HL });
+        const own = tabPos?.get(base + k) ?? null;
+        if (p.midi == null) headPos = null;
+        else if (!p.cont) headPos = own;
+        const tn = makeTabNote(p, p.midi == null ? null : p.cont ? headPos : own);
+        if (hl.has(p.noteIdx)) tn.setStyle({ fillStyle: HL, strokeStyle: HL });
         return tn;
       });
+      tabTuplets = groups.map(g => mkTuplet(tabNotes, g, true));
       tabVoice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(false).addTickables(tabNotes);
       formatter.joinVoices([tabVoice]);
     }
@@ -251,14 +347,14 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
     const chordIdx: number[] = [];
     const chordPiece: number[] = [];
     lick.chords.forEach((c, ci) => {
-      if (Math.floor(c.start / 16) !== b) return;
+      if (barOf(c.start) !== b) return;
       chordIdx.push(ci);
       let k = pcs.findIndex(p => p.start === c.start);
       if (k < 0) k = pcs.findIndex(p => p.start >= c.start);
       chordPiece.push(k);
     });
     const minW = formatter.preCalculateMinTotalWidth(tabVoice ? [voice, tabVoice] : [voice]);
-    return { pieces: pcs, notes, tabNotes, voice, tabVoice, formatter, minW, chordIdx, chordPiece };
+    return { pieces: pcs, notes, tabNotes, groups, tuplets, tabTuplets, voice, tabVoice, formatter, minW, chordIdx, chordPiece };
   });
 
   // chord labels
@@ -293,11 +389,11 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
     // chord labels need room between chord starts
     B.chordIdx.forEach((ci, k) => {
       const next = B.chordIdx[k + 1];
-      const startT = lick.chords[ci].start % 16;
-      const endT = next != null ? lick.chords[next].start % 16 : 16;
+      const startT = lick.chords[ci].start % TPBAR;
+      const endT = next != null ? lick.chords[next].start % TPBAR : TPBAR;
       const span = endT - startT;
-      const need = (textW[ci] + 10) * (16 / Math.max(1, span));
-      if (span < 16) w = Math.max(w, need);
+      const need = (textW[ci] + 10) * (TPBAR / Math.max(1, span));
+      if (span < TPBAR) w = Math.max(w, need);
       else w = Math.max(w, textW[ci] + 30); // a lone chord's label must still fit inside its bar
     });
     void b;
@@ -335,7 +431,8 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const lo = midis.length ? Math.min(...midis) : 60;
   const topLineMidi = clef === 'bass' ? 57 : 77;
   const botLineMidi = clef === 'bass' ? 43 : 64;
-  const extraTop = Math.max(0, (hi - topLineMidi) * 2.9 + 4);
+  const TUP_H = 14; // room for a triplet bracket / number
+  const extraTop = Math.max(0, (hi - topLineMidi) * 2.9 + 4) + (hasTuplets ? TUP_H : 0);
   const extraBot = Math.max(0, (botLineMidi - lo) * 2.9 + 4);
   const CHORD_BASE = 24; // chord baseline below system top
   const topLineOff = CHORD_BASE + 24 + extraTop;
@@ -346,7 +443,9 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const tabH = showTab ? (tabLines - 1) * tabSpacing : 0;
   const TAB_ANNOT = 24; // room above the tab for position labels and finger numbers
   const tabGap = 6 + (showTab ? TAB_ANNOT : 0);
-  const sysH = topLineOff + staffH + belowStaff + (showTab ? tabGap + tabH + 24 : 0);
+  const LABEL_BAND = hasLabels ? 22 : 0; // note-label row between the staff and the tab
+  const TAB_BELOW = 54 + (hasTuplets ? 12 : 0); // full tab: stems, beams and triplet numbers hang below the tab staff
+  const sysH = topLineOff + staffH + belowStaff + LABEL_BAND + (showTab ? tabGap + tabH + TAB_BELOW : 0);
   const totalH = Math.ceil(MARGIN + systems.length * sysH + 6);
 
   // ---------- phase 2: draw ----------
@@ -356,7 +455,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const ctx = renderer.getContext();
   const svg = root.querySelector('svg') as SVGSVGElement;
   const drawnNotes: Map<number, StaveNote> = new Map(); // global piece index -> note
-  const drawnTab: Map<number, TabNote | GhostNote> = new Map();
+  const drawnTab: Map<number, StaveNote> = new Map();
   if (print) {
     ctx.setFillStyle('#000');
     ctx.setStrokeStyle('#000');
@@ -389,6 +488,30 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
       }
     });
     ctx.restore();
+  };
+
+  // note labels: centred under the first piece of each note; a colliding label is nudged right
+  const labelRight: Record<number, number> = {};
+  const labelDone = new Set<number>();
+  const drawLabels = (B: Bar, b: number, si: number, bandTop: number): void => {
+    ctx.save();
+    ctx.setFont(ROMAN_FONT, 10.5, 'normal');
+    B.pieces.forEach((p, k) => {
+      const lab = labels[p.noteIdx];
+      if (p.noteIdx < 0 || p.cont || !lab || !lab.text || labelDone.has(p.noteIdx)) return;
+      labelDone.add(p.noteIdx);
+      const n = B.notes[k];
+      const cx = (n.getNoteHeadBeginX() + n.getNoteHeadEndX()) / 2;
+      const w = ctx.measureText(lab.text).width;
+      let lx = cx - w / 2;
+      const prev = labelRight[si];
+      if (prev != null && lx < prev + 3) lx = prev + 3;
+      labelRight[si] = lx + w;
+      ctx.setFillStyle(print ? '#222' : lab.color ?? '#6E6D67');
+      ctx.fillText(lab.text, lx, bandTop + 11);
+    });
+    ctx.restore();
+    void b;
   };
 
   const pieceBase: number[] = [];
@@ -437,7 +560,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
       let tst: TabStave | null = null;
       if (showTab) {
         tst = new TabStave(x, 0, w, { num_lines: tabLines, spacing_between_lines_px: tabSpacing });
-        const desiredTop = topLineY + staffH + belowStaff + tabGap;
+        const desiredTop = topLineY + staffH + belowStaff + LABEL_BAND + tabGap;
         tst.setY(desiredTop - tst.getYForLine(0));
         if (k === 0) tst.addClef('tab');
         if (b === bars.length - 1) tst.setEndBarType(Barline.type.END);
@@ -453,19 +576,31 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
       const formatW = Math.max(40, st.getNoteEndX() - st.getNoteStartX() - 12);
       B.formatter.format(B.tabVoice ? [B.voice, B.tabVoice] : [B.voice], formatW);
 
-      const beams = Beam.generateBeams(B.notes, { groups: [new Fraction(1, 4)], beam_rests: false });
+      const beams = makeBeams(B.notes, B.pieces, B.groups);
+      const tabBeams = B.tabVoice ? makeBeams(B.tabNotes, B.pieces, B.groups) : [];
+      // triplet brackets sit on the stem side of the standard staff, always below the full tab
+      B.groups.forEach((g, gi) => {
+        const lead = g.idx.map(k => B.notes[k]).find(n => !n.isRest());
+        B.tuplets[gi].setTupletLocation(lead && lead.getStemDirection() < 0 ? Tuplet.LOCATION_BOTTOM : Tuplet.LOCATION_TOP);
+      });
       B.voice.draw(ctx, st);
-      beams.forEach(bm => {
-        const ns = bm.getNotes();
-        if (!print && ns.length && ns.every(n => B.notes.indexOf(n as StaveNote) >= 0 && hl.has(B.pieces[B.notes.indexOf(n as StaveNote)].noteIdx))) {
+      const drawBeams = (bms: Beam[], ns: StaveNote[]): void => bms.forEach(bm => {
+        const bn = bm.getNotes();
+        if (!print && bn.length && bn.every(n => ns.indexOf(n as StaveNote) >= 0 && hl.has(B.pieces[ns.indexOf(n as StaveNote)].noteIdx))) {
           bm.setStyle({ fillStyle: HL, strokeStyle: HL });
         }
         bm.setContext(ctx).draw();
       });
+      drawBeams(beams, B.notes);
+      B.tuplets.forEach(t => t.setContext(ctx).draw());
       if (B.tabVoice && tst) {
         B.tabVoice.draw(ctx, tst);
+        drawBeams(tabBeams, B.tabNotes);
+        B.tabTuplets.forEach(t => t.setTupletLocation(Tuplet.LOCATION_BOTTOM).setContext(ctx).draw());
+        drawTabDots(ctx, B.tabNotes, B.pieces, '#000');
         drawTabMarks(B, pieceBase[b], tst.getYForLine(0));
       }
+      if (hasLabels) drawLabels(B, b, si, topLineY + staffH + belowStaff);
       B.notes.forEach((n, i) => drawnNotes.set(pieceBase[b] + i, n));
       B.tabNotes.forEach((n, i) => drawnTab.set(pieceBase[b] + i, n));
 

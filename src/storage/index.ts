@@ -1,4 +1,5 @@
 import type { Lick } from '../types';
+import { TICKS_PER_16TH } from '../types';
 import { LENGTHS, PROGRESSIONS } from '../theory/progressions';
 import { INSTRUMENTS } from '../instruments';
 import type { CompStyle } from '../audio/comping';
@@ -7,7 +8,8 @@ import type { CompStyle } from '../audio/comping';
 export interface Settings {
   progressionId: string;
   length: keyof typeof LENGTHS;
-  tier: 1 | 2 | 3 | 4;
+  /** Difficulty slider position, integer 0..100 (see difficulty/score.ts posToScore). */
+  target: number;
   instrumentId: string;
   /** 'random' or a concert pitch class 0..11. */
   key: 'random' | number;
@@ -16,6 +18,7 @@ export interface Settings {
   piano: boolean;
   loop: boolean;
   swing: boolean;
+  straight16: boolean;
   hide: boolean;
   showTab: boolean;
   comp: CompStyle;
@@ -28,12 +31,14 @@ export interface Settings {
   tabPosition: 'auto' | string;
   /** Show finger numbers on every tab note. */
   showFingers: boolean;
+  /** Show scale-degree labels and the scale of each chord. */
+  analyze: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   progressionId: 'major-251',
   length: 'standard',
-  tier: 2,
+  target: 37,
   instrumentId: 'alto',
   key: 'random',
   bpm: 120,
@@ -41,6 +46,7 @@ export const DEFAULT_SETTINGS: Settings = {
   piano: true,
   loop: false,
   swing: true,
+  straight16: true,
   hide: false,
   showTab: true,
   comp: 'rootless',
@@ -51,7 +57,11 @@ export const DEFAULT_SETTINGS: Settings = {
   midiBacking: true,
   tabPosition: 'auto',
   showFingers: false,
+  analyze: false,
 };
+
+/** Old `tier` setting -> middle of that tier's slider band. */
+const LEGACY_TIER_TARGET: Record<number, number> = { 1: 12, 2: 37, 3: 62, 4: 87 };
 
 /** Labels that positionsForLick can produce. */
 export const TAB_POSITION_RE = /^(Open pos\.|Pos\. [IVX]{1,6})$/;
@@ -72,16 +82,17 @@ const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** Shape check for a stored lick. Cheap but strict enough that rendering/playing cannot crash. */
+/** Shape check for a stored lick (version 1 or 2). Cheap but strict enough that rendering/playing cannot crash. */
 export function isValidLick(v: unknown): v is Lick {
   if (!isObj(v)) return false;
-  if (v.version !== 1 || typeof v.id !== 'string' || !isNum(v.seed) || !isNum(v.keyPc) || !isNum(v.totalTicks)) return false;
+  if ((v.version !== 1 && v.version !== 2) || typeof v.id !== 'string' || !isNum(v.seed) || !isNum(v.keyPc) || !isNum(v.totalTicks)) return false;
   if (!PROGRESSIONS.some(p => p.id === v.progressionId)) return false;
   if (typeof v.length !== 'string' || !(v.length in LENGTHS)) return false;
   if (v.mode !== 'major' && v.mode !== 'minor') return false;
   if (![1, 2, 3, 4].includes(v.requestedTier as number)) return false;
   if (!Array.isArray(v.chords) || v.chords.length === 0 || !Array.isArray(v.notes) || v.notes.length === 0) return false;
   if (!Array.isArray(v.fragmentIds) || !isNum(v.createdAt)) return false;
+  if (v.targetScore !== undefined && !isNum(v.targetScore)) return false;
   if (v.cellStarts !== undefined && !(Array.isArray(v.cellStarts) && v.cellStarts.every(isNum))) return false;
   for (const c of v.chords) {
     if (!isObj(c) || !isNum(c.rootPc) || typeof c.quality !== 'string' || typeof c.symbol !== 'string' || !isNum(c.start) || !isNum(c.dur)) return false;
@@ -98,12 +109,31 @@ export function isValidLick(v: unknown): v is Lick {
   return true;
 }
 
+/**
+ * Bring a stored lick to the current time grid. Version 1 licks were saved with 16th-note ticks (4 per beat);
+ * version 2 uses 12 ticks per beat, so every tick value is multiplied by 3. Version 2 licks are returned as-is.
+ * Input must already have passed isValidLick.
+ */
+export function migrateLick(lick: Lick): Lick {
+  if (lick.version === 2) return lick;
+  const k = TICKS_PER_16TH;
+  return {
+    ...lick,
+    version: 2,
+    chords: lick.chords.map(c => ({ ...c, start: c.start * k, dur: c.dur * k })),
+    notes: lick.notes.map(n => ({ ...n, start: n.start * k, dur: n.dur * k })),
+    totalTicks: lick.totalTicks * k,
+    ...(Array.isArray(lick.cellStarts) ? { cellStarts: lick.cellStarts.map(t => t * k) } : {}),
+  };
+}
+
 export function sanitizeSettings(raw: unknown): Settings {
   const s: Settings = { ...DEFAULT_SETTINGS };
   if (!isObj(raw)) return s;
   if (typeof raw.progressionId === 'string' && PROGRESSIONS.some(p => p.id === raw.progressionId)) s.progressionId = raw.progressionId;
   if (typeof raw.length === 'string' && raw.length in LENGTHS) s.length = raw.length as Settings['length'];
-  if (isNum(raw.tier) && [1, 2, 3, 4].includes(raw.tier)) s.tier = raw.tier as Settings['tier'];
+  if (isNum(raw.target) && Number.isInteger(raw.target) && raw.target >= 0 && raw.target <= 100) s.target = raw.target;
+  else if (isNum(raw.tier) && [1, 2, 3, 4].includes(raw.tier)) s.target = LEGACY_TIER_TARGET[raw.tier]; // migrate the old 4-way setting
   if (typeof raw.instrumentId === 'string' && INSTRUMENTS.some(i => i.id === raw.instrumentId)) s.instrumentId = raw.instrumentId;
   if (raw.key === 'random') s.key = 'random';
   else if (isNum(raw.key) && Number.isInteger(raw.key) && raw.key >= 0 && raw.key < 12) s.key = raw.key;
@@ -112,7 +142,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (isNum(raw.pianoVolume)) s.pianoVolume = clamp(raw.pianoVolume, 0, 1);
   if (raw.comp === 'rootless' || raw.comp === 'block' || raw.comp === 'sparse') s.comp = raw.comp;
   if (typeof raw.tabPosition === 'string' && (raw.tabPosition === 'auto' || TAB_POSITION_RE.test(raw.tabPosition))) s.tabPosition = raw.tabPosition;
-  for (const k of ['slow', 'piano', 'loop', 'swing', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking'] as const) {
+  for (const k of ['slow', 'piano', 'loop', 'swing', 'straight16', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking', 'analyze'] as const) {
     if (isBool(raw[k])) s[k] = raw[k];
   }
   return s;
@@ -163,7 +193,7 @@ export class Store {
     for (const e of raw) {
       if (!isObj(e) || !isNum(e.at) || !isValidLick(e.lick) || seen.has(e.lick.id)) continue;
       seen.add(e.lick.id);
-      out.push({ lick: e.lick, at: e.at });
+      out.push({ lick: migrateLick(e.lick), at: e.at });
       if (out.length >= limit) break;
     }
     return out;

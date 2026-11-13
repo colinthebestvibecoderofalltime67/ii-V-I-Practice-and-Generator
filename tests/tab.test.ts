@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   assignFrets, fingerLine, positionsForLick, lickFingerings, lickLine, pickFingering, type Fingering, type LineNote,
 } from '../src/render/tab';
+import { AUTHORED_FRAGMENTS, fromSixteenths } from '../src/fragments';
 import { generateLick, transposeLick } from '../src/generator';
 import { concertRange, getInstrument } from '../src/instruments';
 import { isValidLick } from '../src/storage';
 import { PROGRESSIONS } from '../src/theory/progressions';
 import type { Lick, Tier } from '../src/types';
+import { TICKS_PER_16TH as S } from '../src/types';
 
 const GUITAR = [52, 57, 62, 67, 71, 76];
 const BASS = [40, 45, 50, 55];
@@ -45,6 +47,10 @@ function scale(from: number, to: number, pcs = C_MAJOR): number[] {
   return out;
 }
 
+// Fixed pool (the 16th-grid libraries): the fingering-shift bound below is a heuristic that a few unlucky seeded licks
+// exceed, so these samples must not move when new fragments are added to the library.
+const SAMPLE_POOL = AUTHORED_FRAGMENTS.map(fromSixteenths);
+
 function sampleLicks(instId: string, perTier = 4): Lick[] {
   const inst = getInstrument(instId);
   const out: Lick[] = [];
@@ -54,7 +60,7 @@ function sampleLicks(instId: string, perTier = 4): Lick[] {
       const prog = PROGRESSIONS[(seed + k) % PROGRESSIONS.length];
       out.push(generateLick({
         progressionId: prog.id, length: (['short', 'standard', 'long'] as const)[k % 3], keyPc: (seed * 7) % 12,
-        tier, range: concertRange(inst), seed: seed++,
+        tier, range: concertRange(inst), seed: seed++, fragments: SAMPLE_POOL,
       }));
     }
   }
@@ -163,20 +169,20 @@ describe('fingerLine: known shapes', () => {
 describe('cell joins', () => {
   // A 3-octave-ish C major run on offbeats: one shift is unavoidable, and it can happen almost anywhere.
   const notes = scale(60, 89);
-  const line: LineNote[] = notes.map((m, i) => ({ midi: m, start: i * 2 + 1, dur: 2 }));
+  const line: LineNote[] = notes.map((m, i) => ({ midi: m, start: (i * 2 + 1) * S, dur: 2 * S })); // eighths on the off-16th (written in 16ths, scaled)
   const shiftsAt = (f: Fingering) => f.notes.flatMap((n, i) => (n?.shift ? [i] : []));
 
   it('a needed shift moves to the cell join', () => {
     for (const k of [8, 10, 12, 14]) {
-      const f = fingerLine(line, GUITAR, 17, { cellStarts: [1, line[k].start!] });
+      const f = fingerLine(line, GUITAR, 17, { cellStarts: [S, line[k].start!] });
       checkFingering(f, line, GUITAR, 17);
       expect(shiftsAt(f)).toEqual([k]);
     }
   });
 
   it('prefers shifting after a rest or a long note', () => {
-    const withRest: LineNote[] = line.map((n, i) => (i >= 11 ? { ...n, start: n.start! + 4 } : n));
-    withRest.splice(11, 0, { midi: null, start: line[11].start!, dur: 4 });
+    const withRest: LineNote[] = line.map((n, i) => (i >= 11 ? { ...n, start: n.start! + 4 * S } : n));
+    withRest.splice(11, 0, { midi: null, start: line[11].start!, dur: 4 * S });
     const f = fingerLine(withRest, GUITAR, 17);
     expect(shiftsAt(f)).toEqual([12]);
   });

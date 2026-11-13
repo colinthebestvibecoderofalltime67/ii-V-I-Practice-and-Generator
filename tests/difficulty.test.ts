@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { loadPrototypeLicks } from '../scripts/legacy';
 import type { LickNote } from '../src/types';
-import { TIER_THRESHOLDS, scoreLick, tierForScore } from '../src/difficulty/score';
+import { TICKS_PER_16TH as S, TPBAR } from '../src/types';
+import { SCORE_CEIL, TIER_POS, TIER_THRESHOLDS, posToScore, scoreLick, scoreToPos, tierForScore } from '../src/difficulty/score';
 import { expandProgression, getProgression } from '../src/theory/progressions';
 
 const prog = getProgression('major-251');
@@ -12,18 +13,20 @@ const protoScores = () => {
   const by: Record<string, { score: number; tier: number }[]> = { Beginner: [], Medium: [], Advanced: [] };
   for (const l of loadPrototypeLicks()) {
     const notes: LickNote[] = l.notes.map(n => ({
-      midi: n.midi, start: n.start, dur: n.dur, ...(n.tie ? { tie: true } : {}), chord: Math.min(2, Math.floor(n.start / 16)),
-    }));
+      midi: n.midi, start: n.start, dur: n.dur, ...(n.tie ? { tie: true } : {}), chord: Math.min(2, Math.floor(n.start / TPBAR)),
+    })); // prototype notes arrive in engine ticks already
     const r = scoreLick(notes, chords, prog);
     by[l.level].push({ score: r.score, tier: r.tier });
   }
   return by;
 };
 
+// spec durations are written in 16ths (1 = 16th, 4 = quarter, 16 = bar) and scaled to engine ticks
 const mk = (spec: [number | null, number][], tieAll = false): LickNote[] => {
   let t = 0;
-  return spec.map(([midi, dur]) => {
-    const n: LickNote = { midi, start: t, dur, chord: Math.min(2, Math.floor(t / 16)) };
+  return spec.map(([midi, d16]) => {
+    const dur = d16 * S;
+    const n: LickNote = { midi, start: t, dur, chord: Math.min(2, Math.floor(t / TPBAR)) };
     if (tieAll) n.tie = true;
     t += dur;
     return n;
@@ -123,5 +126,25 @@ describe('scoreLick extremes', () => {
     const sc = scoreLick(sync, chords, prog).features.find(f => f.id === 'syncopation')!.points;
     const st = scoreLick(straight, chords, prog).features.find(f => f.id === 'syncopation')!.points;
     expect(sc).toBeGreaterThan(st);
+  });
+});
+
+describe('slider mapping', () => {
+  it('is monotonic, hits the tier boundaries and inverts', () => {
+    expect(posToScore(0)).toBe(0);
+    expect(posToScore(100)).toBe(SCORE_CEIL);
+    TIER_POS.forEach((p, i) => expect(posToScore(p)).toBeCloseTo(TIER_THRESHOLDS[i], 9));
+    let prev = -1;
+    for (let p = 0; p <= 100; p++) {
+      const s = posToScore(p);
+      expect(s).toBeGreaterThan(prev);
+      prev = s;
+      expect(scoreToPos(s)).toBeCloseTo(p, 9);
+      if (p % 25 !== 0) expect(tierForScore(s)).toBe(p < 25 ? 1 : p < 50 ? 2 : p < 75 ? 3 : 4);
+    }
+    expect(posToScore(-5)).toBe(0);
+    expect(posToScore(150)).toBe(SCORE_CEIL);
+    expect(scoreToPos(-3)).toBe(0);
+    expect(scoreToPos(500)).toBe(100);
   });
 });

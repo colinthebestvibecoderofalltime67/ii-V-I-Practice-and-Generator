@@ -3,6 +3,7 @@ import { lickToMidi } from '../src/export/midi';
 import { soundingNotes } from '../src/audio/timing';
 import { expandProgression, PROGRESSIONS } from '../src/theory/progressions';
 import type { Lick, LickNote } from '../src/types';
+import { TICKS_PER_16TH, TPBAR } from '../src/types';
 
 interface MEv { t: number; status: number; d1?: number; d2?: number; meta?: number; data?: number[] }
 function parse(b: Uint8Array) {
@@ -47,11 +48,12 @@ function parse(b: Uint8Array) {
 }
 
 const chords = expandProgression(PROGRESSIONS[0], 'standard', 0);
+// start/dur below are written in 16ths and scaled to engine ticks
 const N = (midi: number | null, start: number, dur: number, extra: Partial<LickNote> = {}): LickNote =>
-  ({ midi, start, dur, chord: Math.min(2, Math.floor(start / 16)), ...extra });
+  ({ midi, start: start * TICKS_PER_16TH, dur: dur * TICKS_PER_16TH, chord: Math.min(2, Math.floor((start * TICKS_PER_16TH) / TPBAR)), ...extra });
 const lick: Lick = {
-  version: 1, id: 't', seed: 1, progressionId: PROGRESSIONS[0].id, length: 'standard', keyPc: 0, mode: 'major',
-  requestedTier: 1, chords, totalTicks: 48, fragmentIds: [],
+  version: 2, id: 't', seed: 1, progressionId: PROGRESSIONS[0].id, length: 'standard', keyPc: 0, mode: 'major',
+  requestedTier: 1, chords, totalTicks: 3 * TPBAR, fragmentIds: [],
   difficulty: { score: 0, tier: 1, features: [] }, createdAt: 0,
   notes: [
     N(62, 0, 2), N(65, 2, 2), N(69, 4, 2), N(72, 6, 2), N(null, 8, 4), N(71, 12, 2), N(69, 14, 2),
@@ -111,5 +113,28 @@ describe('lickToMidi', () => {
     expect(swung[2].t).toBe(480);
     expect(straight[1].t).toBe(240);
     expect(swung[1].t).toBe(320); // 2/3 of a beat
+  });
+});
+
+describe('lickToMidi feel', () => {
+  const mk = (notes: [number, number][]): Lick => ({
+    ...lick,
+    notes: notes.map(([s, d]) => ({ midi: 60, start: s, dur: d, chord: 0 })),
+    totalTicks: 3 * TPBAR,
+  });
+  const base = { bpm: 120, swing: true, comping: false, comp: 'rootless' as const };
+  it('writes 8th triplets at 0/160/320 ticks', () => {
+    const l = mk([[0, 4], [4, 4], [8, 4], [12, 36], [48, 48], [96, 48]]);
+    for (const swing of [true, false]) {
+      const t = ons(parse(lickToMidi(l, { ...base, swing, straight16: true })).tracks[1]).map(e => e.t);
+      expect(t.slice(0, 4)).toEqual([0, 160, 320, 480]);
+    }
+  });
+  it('keeps 16ths straight with swing on when straight16', () => {
+    const l = mk([[0, 3], [3, 3], [6, 3], [9, 3], [12, 36], [48, 48], [96, 48]]);
+    const straight = ons(parse(lickToMidi(l, { ...base, straight16: true })).tracks[1]).map(e => e.t);
+    expect(straight.slice(0, 4)).toEqual([0, 120, 240, 360]);
+    const legacy = ons(parse(lickToMidi(l, base)).tracks[1]).map(e => e.t);
+    expect(legacy[2]).toBe(320);
   });
 });

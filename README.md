@@ -70,6 +70,6 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module layout and contr
 
 ### Adding fragments
 
-Fragments live in `src/fragments/lib/`. Each one is a 2- or 4-beat cell. Pitches are written as semitones above the chord root, and durations as 16th-note ticks. `tests/fragments.test.ts` checks that each fragment is well formed and that the notes on strong beats are chord tones.
+Fragments live in `src/fragments/lib/`. Each one is a 2- or 4-beat cell. Pitches are written as semitones above the chord root, and durations in 16th-note units (the app scales them to its 12-ticks-per-beat grid on load). `tests/fragments.test.ts` checks that each fragment is well formed and that the notes on strong beats are chord tones.
 
 All licks and fragments are original material written for this tool.

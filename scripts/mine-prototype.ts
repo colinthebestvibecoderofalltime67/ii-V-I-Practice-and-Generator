@@ -3,12 +3,17 @@
  * fragments and writes src/fragments/lib/prototype.ts.
  *
  *   npx tsx scripts/mine-prototype.ts      (or: npm run mine)
+ *
+ * UNITS: fragment library files are AUTHORED in sixteenth-note units (1 = 16th, 4 = quarter); src/fragments/index.ts
+ * scales them to the engine's 12-ticks-per-beat grid on load. So this script converts the prototype licks
+ * (engine ticks) back to 16ths, mines in 16ths, and emits 16th-unit data. It therefore keeps its own
+ * 16th-based splitDur instead of the engine's theory/rhythm.splitDur.
  */
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { loadPrototypeLicks } from './legacy';
-import { RENDERABLE_DURS } from '../src/types';
+import { RENDERABLE_DURS, TICKS_PER_16TH } from '../src/types';
 import type { ChordQualityId, FragNote, FragTag, Fragment, Tier } from '../src/types';
 import { inScale, isChordToneOrTension, isChordTone } from '../src/theory/chords';
 
@@ -22,10 +27,13 @@ const BARS = [
 
 interface Piece { rel: number | null; dur: number; tie: boolean; cont: boolean }
 
-/** Split a duration into renderable pieces (largest first). */
+/** Renderable durations in 16th units (1 2 3 4 6 8 12 16). */
+const RENDERABLE_16THS = RENDERABLE_DURS.map(d => d / TICKS_PER_16TH);
+
+/** 16th-unit split of a duration into renderable pieces (largest first). NOT the engine splitDur (that one works in ticks). */
 function splitDur(d: number): number[] {
   const out: number[] = [];
-  const sorted = [...RENDERABLE_DURS].sort((a, b) => b - a);
+  const sorted = [...RENDERABLE_16THS].sort((a, b) => b - a);
   while (d > 0) {
     const p = sorted.find(x => x <= d)!;
     out.push(p);
@@ -123,7 +131,13 @@ function isEnding(notes: FragNote[]): boolean {
 const out: Fragment[] = [];
 const seen = new Set<string>();
 
-loadPrototypeLicks().forEach((lick, li) => {
+// prototype licks arrive in engine ticks; mine in the library's authoring unit (16ths)
+const prototypeLicks = loadPrototypeLicks().map(l => ({
+  ...l,
+  notes: l.notes.map(n => ({ ...n, start: n.start / TICKS_PER_16TH, dur: n.dur / TICKS_PER_16TH })),
+}));
+
+prototypeLicks.forEach((lick, li) => {
   const num = String(li + 1).padStart(2, '0');
   const level = LEVEL[lick.level];
   BARS.forEach(bar => {

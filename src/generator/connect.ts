@@ -1,5 +1,6 @@
 import type { LickChord, LickNote } from '../types';
-import { RENDERABLE_DURS } from '../types';
+import { TICKS_PER_16TH, TPBAR } from '../types';
+import { isTupletDur, splitDur } from '../theory/rhythm';
 import { CHORDS, isChordToneOrTension } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 
@@ -23,17 +24,6 @@ export function leapPenalty(d: number): number {
   return 2.1 + (d - 7) * 1.5;
 }
 
-/** Split a duration into RENDERABLE_DURS pieces (largest first). */
-export function splitDur(d: number): number[] {
-  const out: number[] = [];
-  while (d > 0) {
-    const p = [...RENDERABLE_DURS].reverse().find(x => x <= d)!;
-    out.push(p);
-    d -= p;
-  }
-  return out;
-}
-
 export function chordIndexAt(chords: LickChord[], tick: number): number {
   for (let i = chords.length - 1; i >= 0; i--) if (tick >= chords[i].start) return i;
   return 0;
@@ -46,12 +36,21 @@ export function eventsToNotes(events: Ev[], chords: LickChord[]): LickNote[] {
     let pos = e.start;
     e.pieces.forEach((piece, pi) => {
       const lastPiece = pi === e.pieces.length - 1;
+      if (isTupletDur(piece)) {
+        // Triplet members are emitted verbatim: never split, merged or tied. Groups are aligned by construction,
+        // so they cannot cross a bar line; assert it rather than silently splitting a group.
+        if (e.pieces.length > 1) throw new Error(`triplet note at tick ${pos} cannot be tied`);
+        if (pos % TPBAR + piece > TPBAR) throw new Error(`triplet note at tick ${pos} crosses a bar line`);
+        notes.push({ midi: e.midi, start: pos, dur: piece, chord: chordIndexAt(chords, pos) });
+        pos += piece;
+        return;
+      }
       // split the piece at bar lines, then into renderable values
       const segs: number[] = [];
       let left = piece;
       let p = pos;
       while (left > 0) {
-        const toBar = 16 - (p % 16);
+        const toBar = TPBAR - (p % TPBAR);
         const seg = Math.min(left, toBar);
         segs.push(...splitDur(seg));
         p += seg;
@@ -100,7 +99,8 @@ function nearestMatching(
  *  2. If the join into that note is an awkward leap (> 7 semitones), the last one or two notes before
  *     the boundary are turned into a chromatic approach or an enclosure when that smooths the line.
  *  3. The final sounding note is forced onto a chord tone or the 9th of the last chord.
- * Returns the number of notes that were altered.
+ * Triplet notes (durations off the 16th grid) are never retimed or used as flexible approach notes; only their pitch can be
+ * repaired when they sit on a chord start. Returns the number of notes that were altered.
  */
 export function fixJoins(events: Ev[], chords: LickChord[], range: [number, number]): number {
   let changed = 0;
@@ -140,7 +140,7 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     const j = prev;
     const j2 = soundingBefore(j);
     const before = j2 >= 0 ? (events[j2].midi as number) : null;
-    const flexible = (k: number) => k >= 0 && evDur(events[k]) <= 4 && !startTicks.has(events[k].start) && events[k].midi != null;
+    const flexible = (k: number) => k >= 0 && evDur(events[k]) <= 4 * TICKS_PER_16TH && !isTupletDur(evDur(events[k])) && !startTicks.has(events[k].start) && events[k].midi != null;
     const cost = (a: number | null, b: number, t: number) =>
       (a == null ? 0 : leapPenalty(b - a)) + leapPenalty(t - b);
     const orig = (before == null ? 0 : leapPenalty(prevPitch - before)) + leapPenalty(target - prevPitch);

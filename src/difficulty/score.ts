@@ -1,6 +1,8 @@
 import type { DifficultyFeature, DifficultyResult, LickChord, LickNote, ProgressionDef, Tier } from '../types';
 import { ALTERED_RELS, inScale, isChordTone, isChordToneOrTension } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
+import { TICKS_PER_16TH as S16, TPB } from '../types';
+import { beatOf, findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm';
 
 /**
  * Difficulty scoring (0..100) from the NOTES ONLY (tempo is not a factor).
@@ -23,7 +25,23 @@ export const FEATURE_MAX = {
   leaps: 8,
   range: 4,
   harmony: 8,
+  /** Only present (and only > 0) for licks that contain a triplet group; see TRIPLET_WEIGHT. The other maxima sum
+   *  to 100, so this is bonus headroom: scores are clamped to 100 and licks without triplets are unchanged. */
+  triplets: 10,
 } as const;
+
+/**
+ * Triplet difficulty per group (summed over the lick, then ramped to FEATURE_MAX.triplets over 0..TRIPLET_FULL):
+ *  - 8th-triplet (one beat): moderate;
+ *  - quarter-triplet (two-beat cross-beat feel, replaces the sync contribution a tied/off-beat note would get): more;
+ *  - 16th-triplet (an 8th split in three; fast): most.
+ * Groups that only contain rests are ignored.
+ * No double counting: triplet notes never start/stop on the 16th grid, so syncopation (start % TPB tests for 16th
+ * offsets, and tied notes) does not see them, and the `sixteenths` feature only counts real 16ths (dur === 3),
+ * NOT 16th-triplet notes (dur 2); their speed is paid for once, through the weight below.
+ */
+const TRIPLET_WEIGHT: Record<TupletKind, number> = { t8: 1, tq: 1.8, t16: 2.4 };
+const TRIPLET_FULL = 4;
 
 const ramp = (v: number, lo: number, hi: number): number => Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
 
@@ -33,6 +51,32 @@ export function tierForScore(score: number): Tier {
   if (score < TIER_THRESHOLDS[2]) return 3;
   return 4;
 }
+
+/**
+ * Practical maximum score: the 95th percentile of 360 Expert licks (all progressions, lengths,
+ * four instruments, seeds 1..360) was 57.4, rounded up. The slider's top end maps here.
+ */
+export const SCORE_CEIL = 58;
+
+/** Slider positions (0..100) of the boundaries between tiers 1|2, 2|3, 3|4: each tier gets a quarter of the travel. */
+export const TIER_POS: [number, number, number] = [25, 50, 75];
+
+const KNOTS_SCORE = [0, ...TIER_THRESHOLDS, SCORE_CEIL];
+const KNOTS_POS = [0, ...TIER_POS, 100];
+
+function piecewise(x: number, from: number[], to: number[]): number {
+  if (!(x > from[0])) return to[0];
+  for (let i = 1; i < from.length; i++) {
+    if (x <= from[i]) return to[i - 1] + ((x - from[i - 1]) / (from[i] - from[i - 1])) * (to[i] - to[i - 1]);
+  }
+  return to[to.length - 1];
+}
+
+/** Slider position 0..100 -> target difficulty score (piecewise linear, tier boundaries at 25/50/75). */
+export const posToScore = (pos: number): number => piecewise(pos, KNOTS_POS, KNOTS_SCORE);
+
+/** Difficulty score -> slider position 0..100 (inverse of posToScore, clamped). */
+export const scoreToPos = (score: number): number => piecewise(score, KNOTS_SCORE, KNOTS_POS);
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
@@ -61,7 +105,7 @@ function attacks(notes: LickNote[]): Attack[] {
     const end = n.start + dur;
     out.push({
       midi: n.midi, start: n.start, dur, tied,
-      crossesBeat: Math.floor((end - 1) / 4) > Math.floor(n.start / 4),
+      crossesBeat: beatOf(end - 1) > beatOf(n.start),
     });
   }
   return out;
@@ -70,25 +114,26 @@ function attacks(notes: LickNote[]): Attack[] {
 export function scoreLick(notes: LickNote[], chords: LickChord[], progression: ProgressionDef): DifficultyResult {
   const att = attacks(notes);
   const endTick = notes.reduce((m, n) => Math.max(m, n.start + n.dur), 0);
-  const beats = Math.max(1, endTick / 4);
+  const beats = Math.max(1, endTick / TPB);
   const N = Math.max(1, att.length);
 
   // density: attacks per beat
   const density = att.length / beats;
   // share of 16th-or-shorter attacks (merged durations)
-  const share16 = att.filter(a => a.dur <= 1).length / N;
+  const is16 = (a: Attack) => a.dur <= S16 && !isTupletDur(a.dur);
+  const share16 = att.filter(is16).length / N;
   // fraction of beats that contain 16th motion (runs, not isolated 16ths)
   let runs16 = 0;
-  for (let i = 0; i + 1 < att.length; i++) if (att[i].dur <= 1 && att[i + 1].dur <= 1) runs16++;
+  for (let i = 0; i + 1 < att.length; i++) if (is16(att[i]) && is16(att[i + 1])) runs16++;
   const run16Share = runs16 / N;
 
   // syncopation per beat
   let sync = 0;
   for (const a of att) {
-    const p = a.start % 4;
-    if (p === 2 && a.dur > 2 && a.crossesBeat) sync += 1; // held across the next beat from the "and"
-    else if (p === 1 || p === 3) sync += a.dur >= 2 ? 1 : 0.35; // off-16th, held or not
-    else if (p === 0 && a.dur === 3) sync += 0.2;
+    const p = a.start % TPB;
+    if (p === 2 * S16 && a.dur > 2 * S16 && a.crossesBeat) sync += 1; // held across the next beat from the "and"
+    else if (p === S16 || p === 3 * S16) sync += a.dur >= 2 * S16 ? 1 : 0.35; // off-16th, held or not
+    else if (p === 0 && a.dur === 3 * S16) sync += 0.2; // dotted 8th on the beat
     if (a.tied) sync += a.crossesBeat ? 0.6 : 0.3; // tie across beat or bar
   }
   const syncPerBeat = sync / beats;
@@ -130,6 +175,17 @@ export function scoreLick(notes: LickNote[], chords: LickChord[], progression: P
   const mids = att.map(a => a.midi);
   const span = mids.length ? Math.max(...mids) - Math.min(...mids) : 0;
 
+  // triplet groups that contain at least one sounding note, weighted by kind
+  let tripletLoad = 0;
+  let tripletGroups = 0;
+  if (notes.some(n => isTupletDur(n.dur))) {
+    for (const g of findTupletGroups(notes).groups) {
+      if (!notes.slice(g.first, g.last + 1).some(n => n.midi != null)) continue;
+      tripletLoad += TRIPLET_WEIGHT[g.kind];
+      tripletGroups++;
+    }
+  }
+
   const F = FEATURE_MAX;
   const features: DifficultyFeature[] = [
     { id: 'density', label: 'Busy rhythm', value: r1(density), points: F.density * ramp(density, 0.9, 3.4) },
@@ -151,6 +207,9 @@ export function scoreLick(notes: LickNote[], chords: LickChord[], progression: P
     { id: 'range', label: 'Wide range', value: span, points: F.range * ramp(span, 10, 26) },
     { id: 'harmony', label: 'Advanced harmony', value: progression.complexity, points: F.harmony * progression.complexity },
   ];
+  if (tripletGroups > 0) {
+    features.push({ id: 'triplets', label: 'Triplets', value: tripletGroups, points: F.triplets * ramp(tripletLoad, 0, TRIPLET_FULL) });
+  }
   for (const f of features) f.points = r1(f.points);
   features.sort((a, b) => b.points - a.points);
   const score = Math.max(0, Math.min(100, r1(features.reduce((s, f) => s + f.points, 0))));

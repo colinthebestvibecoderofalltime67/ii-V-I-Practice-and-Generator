@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { bassEvents, compEvents, voiceChords, type CompStyle } from '../src/audio/comping';
 import { CHORDS } from '../src/theory/chords';
 import type { ChordQualityId, LickChord } from '../src/types';
+import { TPB, TPBAR } from '../src/types';
 
 const QUALITIES = Object.keys(CHORDS) as ChordQualityId[];
-const mk = (rootPc: number, quality: ChordQualityId, start: number, beats: number): LickChord =>
-  ({ rootPc, quality, symbol: 'x', start, dur: beats * 4 });
+/** `startBeat` and `beats` are in beats; start/dur are converted to ticks. */
+const mk = (rootPc: number, quality: ChordQualityId, startBeat: number, beats: number): LickChord =>
+  ({ rootPc, quality, symbol: 'x', start: startBeat * TPB, dur: beats * TPB });
 const pcs = (v: number[]) => v.map(m => ((m % 12) + 12) % 12);
 
 describe('piano comping', () => {
@@ -21,7 +23,7 @@ describe('piano comping', () => {
 
   it('keeps voice-leading movement small', () => {
     for (const q of QUALITIES) for (let r = 0; r < 12; r++) {
-      const ch = [mk(r + 2, 'm7', 0, 4), mk(r + 7, q, 16, 4), mk(r, 'maj7', 32, 4)].map(c => ({ ...c, rootPc: c.rootPc % 12 }));
+      const ch = [mk(r + 2, 'm7', 0, 4), mk(r + 7, q, 4, 4), mk(r, 'maj7', 8, 4)].map(c => ({ ...c, rootPc: c.rootPc % 12 }));
       const v = voiceChords(ch, 'rootless');
       for (let i = 1; i < v.length; i++) {
         const move = v[i].reduce((s, m, k) => s + Math.abs(m - v[i - 1][k]), 0);
@@ -31,20 +33,20 @@ describe('piano comping', () => {
   });
 
   it('plays Charleston on long chords, beat 1 on short ones, holds the last', () => {
-    const ch = [mk(2, 'm7', 0, 2), mk(7, 'dom7', 8, 2), mk(0, 'maj7', 16, 8)];
+    const ch = [mk(2, 'm7', 0, 2), mk(7, 'dom7', 2, 2), mk(0, 'maj7', 4, 8)];
     const ev = compEvents(ch, 'rootless');
-    expect(ev.filter(e => e.tick < 16).map(e => e.tick)).toEqual([0, 8]);
-    expect(ev.filter(e => e.tick >= 16)).toEqual([{ midi: ev[2].midi, tick: 16, dur: 32 }]);
-    const ev2 = compEvents([mk(2, 'm7', 0, 4), mk(7, 'dom7', 16, 4), mk(0, 'maj7', 32, 8)], 'block');
-    expect(ev2.map(e => e.tick)).toEqual([0, 6, 16, 22, 32]);
-    expect(compEvents([mk(2, 'm7', 0, 4), mk(7, 'dom7', 16, 4)], 'sparse').map(e => e.tick)).toEqual([0, 16]);
+    expect(ev.filter(e => e.tick < TPBAR).map(e => e.tick)).toEqual([0, 2 * TPB]);
+    expect(ev.filter(e => e.tick >= TPBAR)).toEqual([{ midi: ev[2].midi, tick: TPBAR, dur: 8 * TPB }]);
+    const ev2 = compEvents([mk(2, 'm7', 0, 4), mk(7, 'dom7', 4, 4), mk(0, 'maj7', 8, 8)], 'block');
+    expect(ev2.map(e => e.tick)).toEqual([0, 18, 48, 66, 96]); // Charleston: beat 1, then the "and" of 2 (dotted quarter later)
+    expect(compEvents([mk(2, 'm7', 0, 4), mk(7, 'dom7', 4, 4)], 'sparse').map(e => e.tick)).toEqual([0, TPBAR]);
   });
 });
 
 describe('bass', () => {
   it('hits the root on every chord start, in range, for all qualities and lengths', () => {
     for (const q of QUALITIES) for (const beats of [2, 4, 8]) for (let r = 0; r < 12; r++) {
-      const ch = [mk(r, q, 0, beats), mk((r + 5) % 12, 'dom7', beats * 4, beats), mk((r + 10) % 12, 'maj7', beats * 8, beats)];
+      const ch = [mk(r, q, 0, beats), mk((r + 5) % 12, 'dom7', beats, beats), mk((r + 10) % 12, 'maj7', beats * 2, beats)];
       const ev = bassEvents(ch);
       for (const c of ch) {
         const e = ev.find(x => x.tick === c.start)!;

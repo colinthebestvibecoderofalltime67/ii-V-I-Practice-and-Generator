@@ -7,6 +7,7 @@ import { concertRange, getInstrument } from '../src/instruments';
 import { isValidLick } from '../src/storage';
 import { PROGRESSIONS } from '../src/theory/progressions';
 import type { Lick, Tier } from '../src/types';
+import { TICKS_PER_16TH as S } from '../src/types';
 
 const GUITAR = [52, 57, 62, 67, 71, 76];
 const BASS = [40, 45, 50, 55];
@@ -163,20 +164,20 @@ describe('fingerLine: known shapes', () => {
 describe('cell joins', () => {
   // A 3-octave-ish C major run on offbeats: one shift is unavoidable, and it can happen almost anywhere.
   const notes = scale(60, 89);
-  const line: LineNote[] = notes.map((m, i) => ({ midi: m, start: i * 2 + 1, dur: 2 }));
+  const line: LineNote[] = notes.map((m, i) => ({ midi: m, start: (i * 2 + 1) * S, dur: 2 * S })); // eighths on the off-16th (written in 16ths, scaled)
   const shiftsAt = (f: Fingering) => f.notes.flatMap((n, i) => (n?.shift ? [i] : []));
 
   it('a needed shift moves to the cell join', () => {
     for (const k of [8, 10, 12, 14]) {
-      const f = fingerLine(line, GUITAR, 17, { cellStarts: [1, line[k].start!] });
+      const f = fingerLine(line, GUITAR, 17, { cellStarts: [S, line[k].start!] });
       checkFingering(f, line, GUITAR, 17);
       expect(shiftsAt(f)).toEqual([k]);
     }
   });
 
   it('prefers shifting after a rest or a long note', () => {
-    const withRest: LineNote[] = line.map((n, i) => (i >= 11 ? { ...n, start: n.start! + 4 } : n));
-    withRest.splice(11, 0, { midi: null, start: line[11].start!, dur: 4 });
+    const withRest: LineNote[] = line.map((n, i) => (i >= 11 ? { ...n, start: n.start! + 4 * S } : n));
+    withRest.splice(11, 0, { midi: null, start: line[11].start!, dur: 4 * S });
     const f = fingerLine(withRest, GUITAR, 17);
     expect(shiftsAt(f)).toEqual([12]);
   });

@@ -1,16 +1,19 @@
 import type { Lick, LickChord, LickNote, ChordQualityId } from '../src/types';
+import { TICKS_PER_16TH as S } from '../src/types';
+
+// Fixtures below are written in 16th-note units (1 = 16th, 4 = quarter, 16 = bar) and scaled to engine ticks by S.
 
 const DIFF = { score: 10, tier: 1 as const, features: [] };
 
 function chord(rootPc: number, quality: ChordQualityId, symbol: string, start: number, dur: number): LickChord {
-  return { rootPc, quality, symbol, start, dur };
+  return { rootPc, quality, symbol, start: start * S, dur: dur * S };
 }
 
 /** Compact note list: [midi|null, dur, chord, tie?] laid out sequentially. */
 function seq(spec: [number | null, number, number, boolean?][]): LickNote[] {
   let t = 0;
   return spec.map(([midi, dur, c, tie]) => {
-    const n: LickNote = { midi, start: t, dur, chord: c };
+    const n: LickNote = { midi, start: t * S, dur: dur * S, chord: c };
     if (tie) n.tie = true;
     t += dur;
     return n;
@@ -18,7 +21,7 @@ function seq(spec: [number | null, number, number, boolean?][]): LickNote[] {
 }
 
 function mk(id: string, keyPc: number, mode: 'major' | 'minor', length: 'short' | 'standard' | 'long', chords: LickChord[], notes: LickNote[], total: number): Lick {
-  return { version: 1, id, seed: 1, progressionId: 'x', length, keyPc, mode, requestedTier: 1, chords, notes, totalTicks: total, fragmentIds: [], difficulty: DIFF, createdAt: 0 };
+  return { version: 2, id, seed: 1, progressionId: 'x', length, keyPc, mode, requestedTier: 1, chords, notes, totalTicks: total * S, fragmentIds: [], difficulty: DIFF, createdAt: 0 };
 }
 
 // C major ii-V-I, eighths, tie across bar 2->3. Concert pitches around C4..C5

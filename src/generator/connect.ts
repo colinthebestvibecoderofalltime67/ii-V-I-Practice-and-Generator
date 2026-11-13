@@ -1,5 +1,6 @@
 import type { LickChord, LickNote } from '../types';
-import { RENDERABLE_DURS } from '../types';
+import { TICKS_PER_16TH, TPBAR } from '../types';
+import { splitDur } from '../theory/rhythm';
 import { CHORDS, isChordToneOrTension } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 
@@ -23,17 +24,6 @@ export function leapPenalty(d: number): number {
   return 2.1 + (d - 7) * 1.5;
 }
 
-/** Split a duration into RENDERABLE_DURS pieces (largest first). */
-export function splitDur(d: number): number[] {
-  const out: number[] = [];
-  while (d > 0) {
-    const p = [...RENDERABLE_DURS].reverse().find(x => x <= d)!;
-    out.push(p);
-    d -= p;
-  }
-  return out;
-}
-
 export function chordIndexAt(chords: LickChord[], tick: number): number {
   for (let i = chords.length - 1; i >= 0; i--) if (tick >= chords[i].start) return i;
   return 0;
@@ -51,7 +41,7 @@ export function eventsToNotes(events: Ev[], chords: LickChord[]): LickNote[] {
       let left = piece;
       let p = pos;
       while (left > 0) {
-        const toBar = 16 - (p % 16);
+        const toBar = TPBAR - (p % TPBAR);
         const seg = Math.min(left, toBar);
         segs.push(...splitDur(seg));
         p += seg;
@@ -140,7 +130,7 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     const j = prev;
     const j2 = soundingBefore(j);
     const before = j2 >= 0 ? (events[j2].midi as number) : null;
-    const flexible = (k: number) => k >= 0 && evDur(events[k]) <= 4 && !startTicks.has(events[k].start) && events[k].midi != null;
+    const flexible = (k: number) => k >= 0 && evDur(events[k]) <= 4 * TICKS_PER_16TH && !startTicks.has(events[k].start) && events[k].midi != null;
     const cost = (a: number | null, b: number, t: number) =>
       (a == null ? 0 : leapPenalty(b - a)) + leapPenalty(t - b);
     const orig = (before == null ? 0 : leapPenalty(prevPitch - before)) + leapPenalty(target - prevPitch);

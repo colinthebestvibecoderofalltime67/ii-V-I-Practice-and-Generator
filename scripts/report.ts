@@ -75,7 +75,7 @@ for (const t of TIERS) {
 
 function show(l: Lick) {
   const name = (m: number) => pcName(m, l.keyPc, l.mode) + (Math.floor(m / 12) - 1);
-  // durations are written in ticks (16ths): 1=16th 2=8th 4=quarter 8=half 16=whole; '~' = tied
+  // durations are written in engine ticks: 3=16th 6=8th 12=quarter 24=half 48=whole; '~' = tied
   const out: string[] = [];
   l.chords.forEach((c, ci) => {
     const ns = l.notes.filter(n => n.chord === ci).map(n => `${n.midi == null ? 'r' : name(n.midi)}:${n.dur}${n.tie ? '~' : ''}`);

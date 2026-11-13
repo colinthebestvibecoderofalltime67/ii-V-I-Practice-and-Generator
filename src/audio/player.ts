@@ -1,4 +1,5 @@
 import type { Lick, Timbre } from '../types';
+import { TICKS_PER_16TH, TPB } from '../types';
 import { bassEvents, compEvents, type CompStyle } from './comping';
 import { bass, click, lead, piano } from './synth';
 import { soundingNotes, spanBeats, tickToBeats } from './timing';
@@ -73,7 +74,7 @@ export class Player {
     for (const s of sounds) for (const i of s.indices) byFirst.set(i, s.indices);
     const compEv = opts.piano ? compEvents(lick.chords, opts.comp) : [];
     const bassEv = opts.piano ? bassEvents(lick.chords) : [];
-    const beats = lick.totalTicks / 4;
+    const beats = lick.totalTicks / TPB;
     const sw = opts.swing;
 
     const pass = (st: number): void => {
@@ -86,9 +87,9 @@ export class Player {
       });
       for (const s of sounds) {
         const t = st + tickToBeats(s.start, sw) * spb;
-        const art = s.dur === 1 ? 0.78 : s.dur <= 3 ? 0.9 : 0.97;
+        const art = s.dur === TICKS_PER_16TH ? 0.78 : s.dur <= 3 * TICKS_PER_16TH ? 0.9 : 0.97;
         const dur = spanBeats(s.start, s.dur, sw) * spb * art;
-        lead(ctx, buses.lead, opts.timbre, s.midi, t, dur, s.start % 2 ? 0.75 : 1);
+        lead(ctx, buses.lead, opts.timbre, s.midi, t, dur, s.start % (2 * TICKS_PER_16TH) ? 0.75 : 1); // 16ths off the 8th get a softer accent
       }
       if (opts.metronome) for (let j = 0; j < beats; j++) click(ctx, buses.met, st + j * spb, j % 4 === 0);
       for (const e of compEv) {

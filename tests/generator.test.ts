@@ -6,7 +6,7 @@ import { scoreLick } from '../src/difficulty/score';
 import { isChordToneOrTension, CHORDS } from '../src/theory/chords';
 import { LENGTHS, PROGRESSIONS, expandProgression, getProgression } from '../src/theory/progressions';
 import { mod12 } from '../src/theory/pitch';
-import { RENDERABLE_DURS, type Lick, type LengthId, type Tier } from '../src/types';
+import { RENDERABLE_DURS, TICKS_PER_16TH, TPB, TPBAR, type Lick, type LengthId, type Tier } from '../src/types';
 
 const INSTS = ['alto', 'trumpet', 'trombone', 'bass'];
 const SEEDS = 12;
@@ -21,13 +21,14 @@ const RANGE_TOL = 0;
 function checkInvariants(lick: Lick, range: [number, number], label: string) {
   const def = getProgression(lick.progressionId);
   expect(lick.chords, label).toEqual(expandProgression(def, lick.length, lick.keyPc));
-  const total = LENGTHS[lick.length].beats.reduce((a, b) => a + b, 0) * 4;
+  const total = LENGTHS[lick.length].beats.reduce((a, b) => a + b, 0) * TPB;
   expect(lick.totalTicks, label).toBe(total);
   let t = 0;
   lick.notes.forEach((n, i) => {
     expect(n.start, `${label} contiguous #${i}`).toBe(t);
     expect((RENDERABLE_DURS as readonly number[]).includes(n.dur), `${label} dur ${n.dur}`).toBe(true);
-    expect(Math.floor(n.start / 16), `${label} bar line at note ${i}`).toBe(Math.floor((n.start + n.dur - 1) / 16));
+    expect(Math.floor(n.start / TPBAR), `${label} bar line at note ${i}`).toBe(Math.floor((n.start + n.dur - 1) / TPBAR));
+    expect(n.start % TICKS_PER_16TH + n.dur % TICKS_PER_16TH, `${label} on the 16th grid #${i}`).toBe(0);
     const ci = lick.chords.findIndex(c => n.start >= c.start && n.start < c.start + c.dur);
     expect(n.chord, `${label} chord idx #${i}`).toBe(ci);
     if (n.tie) {

@@ -3,7 +3,8 @@ import {
   StaveTie, TabNote, TabStave, Voice,
 } from 'vexflow';
 import type { Instrument, Lick } from '../types';
-import { RENDERABLE_DURS } from '../types';
+import { TPBAR } from '../types';
+import { barOf, splitDur } from '../theory/rhythm';
 import { CHORDS } from '../theory/chords';
 import { chordRootName, keySignatureName, keyUsesSharps, mod12, vexKey } from '../theory/pitch';
 import { type FingeredNote, lickFingerings, pickFingering, roman } from './tab';
@@ -34,7 +35,7 @@ const CHORD_SIZE = 19;
 const ROMAN_FONT = "'Geist Mono', ui-monospace, monospace";
 const ROMAN_SIZE = 12;
 const DUR_NAME: Record<number, [string, number]> = {
-  1: ['16', 0], 2: ['8', 0], 3: ['8', 1], 4: ['q', 0], 6: ['q', 1], 8: ['h', 0], 12: ['h', 1], 16: ['w', 0],
+  3: ['16', 0], 6: ['8', 0], 9: ['8', 1], 12: ['q', 0], 18: ['q', 1], 24: ['h', 0], 36: ['h', 1], 48: ['w', 0],
 };
 const MAX_BARS_PER_LINE = 4;
 const MARGIN = 10;
@@ -61,19 +62,6 @@ interface Bar {
   chordPiece: number[]; // piece index per chordIdx (-1 if none)
 }
 
-/** Split a duration into renderable pieces, greedy largest first. */
-function splitDur(dur: number): number[] {
-  const out: number[] = [];
-  let left = dur;
-  const sorted = [...RENDERABLE_DURS].sort((a, b) => b - a);
-  while (left > 0) {
-    const d = sorted.find(x => x <= left) ?? 1;
-    out.push(d);
-    left -= d;
-  }
-  return out;
-}
-
 function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
   const bars: Piece[][] = Array.from({ length: nBars }, () => []);
   const notes = lick.notes.map((n, i) => ({ n, i })).sort((a, b) => a.n.start - b.n.start);
@@ -83,7 +71,7 @@ function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
     const end = n.start + n.dur;
     const segs: { start: number; dur: number }[] = [];
     while (pos < end) {
-      const barEnd = (Math.floor(pos / 16) + 1) * 16;
+      const barEnd = (barOf(pos) + 1) * TPBAR;
       const segEnd = Math.min(end, barEnd);
       let p = pos;
       for (const d of splitDur(segEnd - pos)) {
@@ -93,7 +81,7 @@ function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
       pos = segEnd;
     }
     segs.forEach((s, k) => {
-      const bar = Math.floor(s.start / 16);
+      const bar = barOf(s.start);
       if (bar >= nBars) return;
       const isLast = k === segs.length - 1;
       bars[bar].push({
@@ -106,14 +94,14 @@ function buildPieces(lick: Lick, transpose: number, nBars: number): Piece[][] {
   // mark continuations & fill gaps with rests (defensive)
   const flat: Piece[] = [];
   bars.forEach((pcs, b) => {
-    let t = b * 16;
+    let t = b * TPBAR;
     const filled: Piece[] = [];
     for (const p of pcs) {
       if (p.start > t) for (const d of splitDur(p.start - t)) { filled.push({ noteIdx: -1, start: t, dur: d, midi: null, tieNext: false, cont: false }); t += d; }
       filled.push(p);
       t = Math.max(t, p.start + p.dur);
     }
-    if (t < (b + 1) * 16) for (const d of splitDur((b + 1) * 16 - t)) { filled.push({ noteIdx: -1, start: t, dur: d, midi: null, tieNext: false, cont: false }); t += d; }
+    if (t < (b + 1) * TPBAR) for (const d of splitDur((b + 1) * TPBAR - t)) { filled.push({ noteIdx: -1, start: t, dur: d, midi: null, tieNext: false, cont: false }); t += d; }
     bars[b] = filled;
     flat.push(...filled);
   });
@@ -184,7 +172,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const writtenKey = mod12(lick.keyPc + inst.transpose);
   const sharps = keyUsesSharps(writtenKey, lick.mode);
   const keySig = keySignatureName(writtenKey, lick.mode);
-  const nBars = Math.max(1, Math.ceil(lick.totalTicks / 16));
+  const nBars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
   const showTab = !!(opts.showTab && inst.tab);
   const tab = inst.tab;
 
@@ -251,7 +239,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
     const chordIdx: number[] = [];
     const chordPiece: number[] = [];
     lick.chords.forEach((c, ci) => {
-      if (Math.floor(c.start / 16) !== b) return;
+      if (barOf(c.start) !== b) return;
       chordIdx.push(ci);
       let k = pcs.findIndex(p => p.start === c.start);
       if (k < 0) k = pcs.findIndex(p => p.start >= c.start);
@@ -293,11 +281,11 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
     // chord labels need room between chord starts
     B.chordIdx.forEach((ci, k) => {
       const next = B.chordIdx[k + 1];
-      const startT = lick.chords[ci].start % 16;
-      const endT = next != null ? lick.chords[next].start % 16 : 16;
+      const startT = lick.chords[ci].start % TPBAR;
+      const endT = next != null ? lick.chords[next].start % TPBAR : TPBAR;
       const span = endT - startT;
-      const need = (textW[ci] + 10) * (16 / Math.max(1, span));
-      if (span < 16) w = Math.max(w, need);
+      const need = (textW[ci] + 10) * (TPBAR / Math.max(1, span));
+      if (span < TPBAR) w = Math.max(w, need);
       else w = Math.max(w, textW[ci] + 30); // a lone chord's label must still fit inside its bar
     });
     void b;

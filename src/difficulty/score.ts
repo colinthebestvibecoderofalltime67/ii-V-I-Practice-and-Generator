@@ -1,6 +1,8 @@
 import type { DifficultyFeature, DifficultyResult, LickChord, LickNote, ProgressionDef, Tier } from '../types';
 import { ALTERED_RELS, inScale, isChordTone, isChordToneOrTension } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
+import { TICKS_PER_16TH as S16, TPB } from '../types';
+import { beatOf } from '../theory/rhythm';
 
 /**
  * Difficulty scoring (0..100) from the NOTES ONLY (tempo is not a factor).
@@ -61,7 +63,7 @@ function attacks(notes: LickNote[]): Attack[] {
     const end = n.start + dur;
     out.push({
       midi: n.midi, start: n.start, dur, tied,
-      crossesBeat: Math.floor((end - 1) / 4) > Math.floor(n.start / 4),
+      crossesBeat: beatOf(end - 1) > beatOf(n.start),
     });
   }
   return out;
@@ -70,25 +72,25 @@ function attacks(notes: LickNote[]): Attack[] {
 export function scoreLick(notes: LickNote[], chords: LickChord[], progression: ProgressionDef): DifficultyResult {
   const att = attacks(notes);
   const endTick = notes.reduce((m, n) => Math.max(m, n.start + n.dur), 0);
-  const beats = Math.max(1, endTick / 4);
+  const beats = Math.max(1, endTick / TPB);
   const N = Math.max(1, att.length);
 
   // density: attacks per beat
   const density = att.length / beats;
   // share of 16th-or-shorter attacks (merged durations)
-  const share16 = att.filter(a => a.dur <= 1).length / N;
+  const share16 = att.filter(a => a.dur <= S16).length / N;
   // fraction of beats that contain 16th motion (runs, not isolated 16ths)
   let runs16 = 0;
-  for (let i = 0; i + 1 < att.length; i++) if (att[i].dur <= 1 && att[i + 1].dur <= 1) runs16++;
+  for (let i = 0; i + 1 < att.length; i++) if (att[i].dur <= S16 && att[i + 1].dur <= S16) runs16++;
   const run16Share = runs16 / N;
 
   // syncopation per beat
   let sync = 0;
   for (const a of att) {
-    const p = a.start % 4;
-    if (p === 2 && a.dur > 2 && a.crossesBeat) sync += 1; // held across the next beat from the "and"
-    else if (p === 1 || p === 3) sync += a.dur >= 2 ? 1 : 0.35; // off-16th, held or not
-    else if (p === 0 && a.dur === 3) sync += 0.2;
+    const p = a.start % TPB;
+    if (p === 2 * S16 && a.dur > 2 * S16 && a.crossesBeat) sync += 1; // held across the next beat from the "and"
+    else if (p === S16 || p === 3 * S16) sync += a.dur >= 2 * S16 ? 1 : 0.35; // off-16th, held or not
+    else if (p === 0 && a.dur === 3 * S16) sync += 0.2; // dotted 8th on the beat
     if (a.tied) sync += a.crossesBeat ? 0.6 : 0.3; // tie across beat or bar
   }
   const syncPerBeat = sync / beats;

@@ -1,4 +1,5 @@
 import type { LengthId, LickChord, ProgressionDef } from '../types';
+import { TPB } from '../types';
 import { CHORDS } from './chords';
 import { chordRootName, mod12 } from './pitch';
 
@@ -72,7 +73,7 @@ export function expandProgression(def: ProgressionDef, length: LengthId, keyPc: 
   let start = 0;
   return def.slots.map((s, i) => {
     const rootPc = mod12(keyPc + s.degree);
-    const dur = beats[i] * 4;
+    const dur = beats[i] * TPB;
     const c: LickChord = {
       rootPc,
       quality: s.quality,
@@ -85,4 +86,4 @@ export function expandProgression(def: ProgressionDef, length: LengthId, keyPc: 
   });
 }
 
-export const totalTicks = (length: LengthId): number => LENGTHS[length].beats.reduce((a, b) => a + b, 0) * 4;
+export const totalTicks = (length: LengthId): number => LENGTHS[length].beats.reduce((a, b) => a + b, 0) * TPB;

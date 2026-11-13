@@ -1,4 +1,5 @@
 import type { Lick } from '../types';
+import { TPB } from '../types';
 import { bassEvents, compEvents, type CompEvent, type CompStyle } from '../audio/comping';
 import { soundingNotes, tickToBeats } from '../audio/timing';
 
@@ -50,7 +51,7 @@ function noteEvents(list: { midi: number[]; tick: number; dur: number }[], ch: n
 export function lickToMidi(lick: Lick, opts: MidiOptions): Uint8Array {
   const swing = opts.swing;
   const bpm = Math.min(320, Math.max(20, opts.bpm));
-  const endTick = Math.round((lick.totalTicks / 4) * PPQ);
+  const endTick = Math.round((lick.totalTicks / TPB) * PPQ);
 
   const tempo = Math.round(60_000_000 / bpm);
   const conductor: Ev[] = [

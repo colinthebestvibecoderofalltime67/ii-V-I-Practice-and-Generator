@@ -1,5 +1,5 @@
 import type { ChordQualityId, Fragment, LengthId, Lick, LickChord, LickNote, Tier } from '../types';
-import { RENDERABLE_DURS } from '../types';
+import { RENDERABLE_DURS, TPB } from '../types';
 import { FRAGMENTS } from '../fragments';
 import { CHORDS } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
@@ -38,7 +38,7 @@ function isValidFragment(f: Fragment): boolean {
     sum += n.dur;
     if (n.tie && (n.rel == null || i + 1 >= f.notes.length || f.notes[i + 1].rel !== n.rel)) return false;
   }
-  return sum === f.beats * 4 && f.notes.some(n => n.rel != null);
+  return sum === f.beats * TPB && f.notes.some(n => n.rel != null);
 }
 
 /** Simple guide-tone / arpeggio fragment, used only when the library has nothing for a combination. */
@@ -49,12 +49,12 @@ function synthFragment(q: ChordQualityId, beats: 2 | 4, ending: boolean): Fragme
     const g = c.guide[0];
     return {
       id, qualities: [q], beats, tags: ['guide-tone'], level: 1, ending: true, source: 'original',
-      notes: beats === 4 ? [{ rel: g, dur: 12 }, { rel: null, dur: 4 }] : [{ rel: g, dur: 6 }, { rel: null, dur: 2 }],
+      notes: beats === 4 ? [{ rel: g, dur: 3 * TPB }, { rel: null, dur: TPB }] : [{ rel: g, dur: TPB + TPB / 2 }, { rel: null, dur: TPB / 2 }],
     };
   }
   const tones = [...c.tones].sort((a, b) => a - b);
   const count = beats === 4 ? 4 : 4;
-  const dur = beats === 4 ? 4 : 2;
+  const dur = beats === 4 ? TPB : TPB / 2;
   const notes = Array.from({ length: count }, (_, i) => {
     const k = i + 1; // start on the third
     return { rel: tones[k % tones.length] + 12 * Math.floor(k / tones.length), dur };
@@ -145,7 +145,7 @@ function buildPlan(
       });
       prevId = frag.id;
       plan.push({ frag, chordIdx: ci, start: tick });
-      tick += b * 4;
+      tick += b * TPB;
       beat += b;
     });
   });
@@ -320,7 +320,7 @@ export function generateLick(opts: GenerateOptions): Lick {
   if (end !== totalTicks) throw new Error(`generator produced ${end} ticks, expected ${totalTicks}`);
 
   return {
-    version: 1,
+    version: 2,
     id: makeId(def.id, opts.length, keyPc, opts.tier, seed),
     seed,
     progressionId: def.id,

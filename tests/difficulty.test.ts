@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadPrototypeLicks } from '../scripts/legacy';
 import type { LickNote } from '../src/types';
+import { TICKS_PER_16TH as S, TPBAR } from '../src/types';
 import { TIER_THRESHOLDS, scoreLick, tierForScore } from '../src/difficulty/score';
 import { expandProgression, getProgression } from '../src/theory/progressions';
 
@@ -12,18 +13,20 @@ const protoScores = () => {
   const by: Record<string, { score: number; tier: number }[]> = { Beginner: [], Medium: [], Advanced: [] };
   for (const l of loadPrototypeLicks()) {
     const notes: LickNote[] = l.notes.map(n => ({
-      midi: n.midi, start: n.start, dur: n.dur, ...(n.tie ? { tie: true } : {}), chord: Math.min(2, Math.floor(n.start / 16)),
-    }));
+      midi: n.midi, start: n.start, dur: n.dur, ...(n.tie ? { tie: true } : {}), chord: Math.min(2, Math.floor(n.start / TPBAR)),
+    })); // prototype notes arrive in engine ticks already
     const r = scoreLick(notes, chords, prog);
     by[l.level].push({ score: r.score, tier: r.tier });
   }
   return by;
 };
 
+// spec durations are written in 16ths (1 = 16th, 4 = quarter, 16 = bar) and scaled to engine ticks
 const mk = (spec: [number | null, number][], tieAll = false): LickNote[] => {
   let t = 0;
-  return spec.map(([midi, dur]) => {
-    const n: LickNote = { midi, start: t, dur, chord: Math.min(2, Math.floor(t / 16)) };
+  return spec.map(([midi, d16]) => {
+    const dur = d16 * S;
+    const n: LickNote = { midi, start: t, dur, chord: Math.min(2, Math.floor(t / TPBAR)) };
     if (tieAll) n.tie = true;
     t += dur;
     return n;

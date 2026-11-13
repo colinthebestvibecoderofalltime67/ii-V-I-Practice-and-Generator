@@ -1,4 +1,5 @@
 import type { Lick } from '../types';
+import { TICKS_PER_16TH } from '../types';
 import { LENGTHS, PROGRESSIONS } from '../theory/progressions';
 import { INSTRUMENTS } from '../instruments';
 import type { CompStyle } from '../audio/comping';
@@ -72,10 +73,10 @@ const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** Shape check for a stored lick. Cheap but strict enough that rendering/playing cannot crash. */
+/** Shape check for a stored lick (version 1 or 2). Cheap but strict enough that rendering/playing cannot crash. */
 export function isValidLick(v: unknown): v is Lick {
   if (!isObj(v)) return false;
-  if (v.version !== 1 || typeof v.id !== 'string' || !isNum(v.seed) || !isNum(v.keyPc) || !isNum(v.totalTicks)) return false;
+  if ((v.version !== 1 && v.version !== 2) || typeof v.id !== 'string' || !isNum(v.seed) || !isNum(v.keyPc) || !isNum(v.totalTicks)) return false;
   if (!PROGRESSIONS.some(p => p.id === v.progressionId)) return false;
   if (typeof v.length !== 'string' || !(v.length in LENGTHS)) return false;
   if (v.mode !== 'major' && v.mode !== 'minor') return false;
@@ -96,6 +97,24 @@ export function isValidLick(v: unknown): v is Lick {
     if (!isObj(f) || typeof f.id !== 'string' || typeof f.label !== 'string' || !isNum(f.points)) return false;
   }
   return true;
+}
+
+/**
+ * Bring a stored lick to the current time grid. Version 1 licks were saved with 16th-note ticks (4 per beat);
+ * version 2 uses 12 ticks per beat, so every tick value is multiplied by 3. Version 2 licks are returned as-is.
+ * Input must already have passed isValidLick.
+ */
+export function migrateLick(lick: Lick): Lick {
+  if (lick.version === 2) return lick;
+  const k = TICKS_PER_16TH;
+  return {
+    ...lick,
+    version: 2,
+    chords: lick.chords.map(c => ({ ...c, start: c.start * k, dur: c.dur * k })),
+    notes: lick.notes.map(n => ({ ...n, start: n.start * k, dur: n.dur * k })),
+    totalTicks: lick.totalTicks * k,
+    ...(Array.isArray(lick.cellStarts) ? { cellStarts: lick.cellStarts.map(t => t * k) } : {}),
+  };
 }
 
 export function sanitizeSettings(raw: unknown): Settings {
@@ -163,7 +182,7 @@ export class Store {
     for (const e of raw) {
       if (!isObj(e) || !isNum(e.at) || !isValidLick(e.lick) || seen.has(e.lick.id)) continue;
       seen.add(e.lick.id);
-      out.push({ lick: e.lick, at: e.at });
+      out.push({ lick: migrateLick(e.lick), at: e.at });
       if (out.length >= limit) break;
     }
     return out;

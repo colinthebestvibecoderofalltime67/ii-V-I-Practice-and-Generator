@@ -1,14 +1,25 @@
 import type { Lick } from '../types';
+import { TICKS_PER_16TH, TPB } from '../types';
 
 /** Fraction of a beat taken by the first eighth of a swung pair (triplet feel). */
 export const SWING_RATIO = 2 / 3;
 
-/** Position in beats of a tick (16th note), with optional swing applied to the off-beat eighths/sixteenths. */
+/**
+ * Swung position (fraction of a beat) of each 16th within the beat: straight 0, 1/4, 1/2, 3/4 map to
+ * 0, SR/2, SR, SR + (1 - SR)/2. Ticks between these anchors are interpolated linearly.
+ */
+const SWING_ANCHORS = [0, SWING_RATIO / 2, SWING_RATIO, SWING_RATIO + (1 - SWING_RATIO) / 2, 1];
+
+/** Position in beats of a tick (12 per beat), with optional swing applied to the off-beat eighths/sixteenths. */
 export function tickToBeats(tick: number, swing: boolean): number {
-  if (!swing) return tick / 4;
-  const beat = Math.floor(tick / 4);
-  const r = tick - beat * 4;
-  const off = r === 0 ? 0 : r === 1 ? SWING_RATIO / 2 : r === 2 ? SWING_RATIO : SWING_RATIO + (1 - SWING_RATIO) / 2;
+  if (!swing) return tick / TPB;
+  const beat = Math.floor(tick / TPB);
+  const r = tick - beat * TPB;
+  const k = Math.floor(r / TICKS_PER_16TH);
+  const rem = r - k * TICKS_PER_16TH;
+  const off = rem === 0
+    ? SWING_ANCHORS[k]
+    : SWING_ANCHORS[k] + (SWING_ANCHORS[k + 1] - SWING_ANCHORS[k]) * (rem / TICKS_PER_16TH);
   return beat + off;
 }
 

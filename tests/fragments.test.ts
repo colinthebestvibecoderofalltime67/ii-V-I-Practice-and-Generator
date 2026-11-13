@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FRAGMENTS } from '../src/fragments';
 import { ORIGINAL_FRAGMENTS } from '../src/fragments/lib/original';
-import { RENDERABLE_DURS } from '../src/types';
+import { RENDERABLE_DURS, TPB } from '../src/types';
 import type { ChordQualityId, Fragment } from '../src/types';
 import { isChordToneOrTension } from '../src/theory/chords';
 
@@ -9,6 +9,7 @@ const QUALS: ChordQualityId[] = ['m7', 'm7b5', 'dom7', 'dom7alt', 'maj7', 'm6'];
 const ENDING_OK = new Set([0, 2, 3, 4, 7, 9, 11]);
 const mod12 = (n: number) => ((n % 12) + 12) % 12;
 
+// FRAGMENTS is already scaled to the engine grid (12 ticks per beat), so ticks below are engine ticks.
 const attacks = (f: Fragment) => {
   let t = 0;
   return f.notes.map(n => { const r = { n, t }; t += n.dur; return r; });
@@ -23,7 +24,7 @@ describe('fragment structure', () => {
   for (const f of FRAGMENTS) {
     it(`${f.id} is structurally valid`, () => {
       expect(f.qualities.length).toBeGreaterThan(0);
-      expect(f.notes.reduce((s, n) => s + n.dur, 0)).toBe(f.beats * 4);
+      expect(f.notes.reduce((s, n) => s + n.dur, 0)).toBe(f.beats * TPB);
       for (const n of f.notes) expect((RENDERABLE_DURS as readonly number[]).includes(n.dur)).toBe(true);
       f.notes.forEach((n, i) => {
         if (n.tie) {
@@ -36,7 +37,7 @@ describe('fragment structure', () => {
 
     it(`${f.id} obeys the strong-beat rule`, () => {
       for (const { n, t } of attacks(f)) {
-        if (n.rel === null || (t !== 0 && t !== 8)) continue;
+        if (n.rel === null || (t !== 0 && t !== 2 * TPB)) continue;
         for (const q of f.qualities) expect(isChordToneOrTension(n.rel, 0, q), `${f.id} rel ${n.rel} at tick ${t} over ${q}`).toBe(true);
       }
     });
@@ -47,7 +48,7 @@ describe('fragment structure', () => {
         let last = sounding.length - 1;
         let dur = sounding[last].dur;
         while (last > 0 && sounding[last - 1].tie) { last--; dur += sounding[last].dur; }
-        expect(dur).toBeGreaterThanOrEqual(4);
+        expect(dur).toBeGreaterThanOrEqual(TPB);
         expect(ENDING_OK.has(mod12(sounding[sounding.length - 1].rel as number))).toBe(true);
       });
     }

@@ -1,6 +1,7 @@
 import './styles.css';
 import type { Instrument, Lick, Tier } from './types';
-import { TIER_NAMES } from './types';
+import { TIER_NAMES, TPBAR } from './types';
+import { barOf } from './theory/rhythm';
 import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
 import { INSTRUMENTS, concertRange, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
@@ -171,7 +172,7 @@ function tabIndex(): 'auto' | number {
 function activeBar(): number | undefined {
   if (!lick || !highlight.length) return undefined;
   const n = lick.notes[highlight[0]];
-  return n ? Math.floor(n.start / 16) : undefined;
+  return n ? barOf(n.start) : undefined;
 }
 
 function renderNotation(): void {
@@ -326,7 +327,7 @@ function playOptions(): PlayOptions {
 function startPlayback(): void {
   if (!lick) return;
   highlight = [];
-  const bars = Math.max(1, Math.ceil(lick.totalTicks / 16));
+  const bars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
   player.play(lick, playOptions(), {
     onNote: idx => {
       highlight = idx;

@@ -3,6 +3,7 @@ import { lickToMidi } from '../src/export/midi';
 import { soundingNotes } from '../src/audio/timing';
 import { expandProgression, PROGRESSIONS } from '../src/theory/progressions';
 import type { Lick, LickNote } from '../src/types';
+import { TICKS_PER_16TH, TPBAR } from '../src/types';
 
 interface MEv { t: number; status: number; d1?: number; d2?: number; meta?: number; data?: number[] }
 function parse(b: Uint8Array) {
@@ -47,11 +48,12 @@ function parse(b: Uint8Array) {
 }
 
 const chords = expandProgression(PROGRESSIONS[0], 'standard', 0);
+// start/dur below are written in 16ths and scaled to engine ticks
 const N = (midi: number | null, start: number, dur: number, extra: Partial<LickNote> = {}): LickNote =>
-  ({ midi, start, dur, chord: Math.min(2, Math.floor(start / 16)), ...extra });
+  ({ midi, start: start * TICKS_PER_16TH, dur: dur * TICKS_PER_16TH, chord: Math.min(2, Math.floor((start * TICKS_PER_16TH) / TPBAR)), ...extra });
 const lick: Lick = {
-  version: 1, id: 't', seed: 1, progressionId: PROGRESSIONS[0].id, length: 'standard', keyPc: 0, mode: 'major',
-  requestedTier: 1, chords, totalTicks: 48, fragmentIds: [],
+  version: 2, id: 't', seed: 1, progressionId: PROGRESSIONS[0].id, length: 'standard', keyPc: 0, mode: 'major',
+  requestedTier: 1, chords, totalTicks: 3 * TPBAR, fragmentIds: [],
   difficulty: { score: 0, tier: 1, features: [] }, createdAt: 0,
   notes: [
     N(62, 0, 2), N(65, 2, 2), N(69, 4, 2), N(72, 6, 2), N(null, 8, 4), N(71, 12, 2), N(69, 14, 2),

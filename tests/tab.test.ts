@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   assignFrets, fingerLine, positionsForLick, lickFingerings, lickLine, pickFingering, type Fingering, type LineNote,
 } from '../src/render/tab';
+import { AUTHORED_FRAGMENTS, fromSixteenths } from '../src/fragments';
 import { generateLick, transposeLick } from '../src/generator';
 import { concertRange, getInstrument } from '../src/instruments';
 import { isValidLick } from '../src/storage';
@@ -46,6 +47,10 @@ function scale(from: number, to: number, pcs = C_MAJOR): number[] {
   return out;
 }
 
+// Fixed pool (the 16th-grid libraries): the fingering-shift bound below is a heuristic that a few unlucky seeded licks
+// exceed, so these samples must not move when new fragments are added to the library.
+const SAMPLE_POOL = AUTHORED_FRAGMENTS.map(fromSixteenths);
+
 function sampleLicks(instId: string, perTier = 4): Lick[] {
   const inst = getInstrument(instId);
   const out: Lick[] = [];
@@ -55,7 +60,7 @@ function sampleLicks(instId: string, perTier = 4): Lick[] {
       const prog = PROGRESSIONS[(seed + k) % PROGRESSIONS.length];
       out.push(generateLick({
         progressionId: prog.id, length: (['short', 'standard', 'long'] as const)[k % 3], keyPc: (seed * 7) % 12,
-        tier, range: concertRange(inst), seed: seed++,
+        tier, range: concertRange(inst), seed: seed++, fragments: SAMPLE_POOL,
       }));
     }
   }

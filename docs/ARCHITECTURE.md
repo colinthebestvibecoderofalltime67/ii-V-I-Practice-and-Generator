@@ -46,7 +46,13 @@ export interface RenderOptions {
   activeBar?: number; activeBarColor?: string;   // faint tint behind the bar being played (ignored in print)
   tabPosition?: 'auto' | number;                 // tab fingering: index into lickFingerings(...).positions
   showFingers?: boolean;                         // finger numbers on every tab note (else only at shifts)
+  noteLabels?: ({ text: string; color?: string } | null | undefined)[]; // per lick note, drawn in a row under the staff (above the tab)
 }
+// Triplets: pieces in a triplet group keep their real tick duration, are written at tupletDisplayDur and get a VexFlow
+// Tuplet(3:2) (beamed 8th/16th groups show only the "3"; quarter triplets and groups with rests get a bracket). Triplet
+// groups beam on their own; other notes beam per beat and never join a triplet. buildPieces() is exported and pure.
+// Tab ("Tab. full"): TabNotes with stems/beams/tuplets BELOW the tab staff; rests are StaveNote rests drawn on the tab
+// stave; tied continuations keep the stem but show no fret number.
 export function renderLick(container: HTMLElement, lick: Lick, inst: Instrument, opts?: RenderOptions): SVGSVGElement | null;
 // src/render/tab.ts (pure)
 export function assignFrets(written: (number | null)[], tuning: number[], frets: number): ({ str: number; fret: number } | null)[];
@@ -84,7 +90,10 @@ export class Player {
 // midi.ts (pure)
 export function lickToMidi(lick: Lick, opts: { bpm: number; swing: boolean; comping: boolean; comp: CompStyle }): Uint8Array;
 // pdf.ts (browser)
-export async function exportPdf(lick: Lick, inst: Instrument): Promise<void>;  // triggers download
+export async function exportPdf(lick: Lick, inst: Instrument,
+  opts?: Pick<RenderOptions, 'showTab' | 'tabPosition' | 'showFingers' | 'noteLabels'>): Promise<void>;  // triggers download
+// Same renderer as on screen (print mode). showTab defaults to !!inst.tab only when the caller passes none,
+// so the user's "Show tab" setting is honoured.
 ```
 
 ### Storage: `src/storage/`

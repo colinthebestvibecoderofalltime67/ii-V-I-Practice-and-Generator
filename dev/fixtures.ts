@@ -65,3 +65,37 @@ export const restHeavy = mk('rests', 5, 'major', 'standard',
     [null, 16, 1],
     [null, 6, 2], [69, 2, 2], [65, 8, 2],
   ]), 48);
+
+/** Like seq() but durations are raw engine ticks (needed for triplets: 2 / 4 / 8). */
+function seqT(spec: [number | null, number, number, boolean?][]): LickNote[] {
+  let t = 0;
+  return spec.map(([midi, dur, c, tie]) => {
+    const n: LickNote = { midi, start: t, dur, chord: c };
+    if (tie) n.tie = true;
+    t += dur;
+    return n;
+  });
+}
+const mkT = (id: string, chords: LickChord[], notes: LickNote[]): Lick =>
+  ({ ...mk(id, 0, 'major', 'standard', chords, notes, 0), totalTicks: 144 });
+const chordT = (rootPc: number, quality: ChordQualityId, symbol: string, bar: number): LickChord =>
+  ({ rootPc, quality, symbol, start: bar * 48, dur: 48 });
+
+// Triplets, C major ii-V-I (concert).
+// Bar 1: 8th-triplet, quarter+8th triplet (2+1 units), two 8ths, dotted 8th + 16th.
+// Bar 2: tied quarter + 8th, 8ths, then a quarter-triplet group on beats 3-4 (one note 2 units long).
+// Bar 3: 8th + 16th-triplet turn, 8th-triplet group with a rest + 2-unit note, 8th-triplet, 16th-triplet (8th + 16th) + 8th.
+export const triplets = mkT('trip', [chordT(2, 'm7', 'Dm7', 0), chordT(7, 'dom7', 'G7', 1), chordT(0, 'maj7', 'Cmaj7', 2)],
+  seqT([
+    [62, 4, 0], [65, 4, 0], [69, 4, 0], [72, 8, 0], [71, 4, 0], [69, 6, 0], [67, 6, 0], [65, 9, 0], [62, 3, 0],
+    [67, 12, 1, true], [67, 6, 1], [71, 6, 1], [74, 8, 1], [71, 16, 1],
+    [72, 6, 2], [71, 2, 2], [69, 2, 2], [67, 2, 2], [null, 4, 2], [69, 8, 2], [67, 4, 2], [64, 4, 2], [60, 4, 2], [64, 4, 2], [67, 2, 2], [72, 6, 2],
+  ]));
+
+// Mostly triplets: three full 8th-triplet beats, a 16th-triplet turn, quarter triplets, then a tied long note.
+export const tripletRun = mkT('trip2', [chordT(2, 'm7', 'Dm7', 0), chordT(7, 'dom7', 'G7', 1), chordT(0, 'maj7', 'Cmaj7', 2)],
+  seqT([
+    [62, 4, 0], [65, 4, 0], [69, 4, 0], [72, 4, 0], [69, 4, 0], [65, 4, 0], [67, 4, 0], [71, 4, 0], [74, 4, 0], [77, 4, 0], [74, 4, 0], [71, 4, 0],
+    [null, 4, 1], [67, 4, 1], [71, 4, 1], [74, 2, 1], [77, 2, 1], [76, 2, 1], [74, 2, 1], [71, 2, 1], [67, 2, 1], [68, 8, 1], [67, 8, 1], [66, 8, 1],
+    [67, 36, 2, true], [67, 12, 2],
+  ]));

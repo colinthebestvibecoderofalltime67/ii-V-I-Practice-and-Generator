@@ -7,9 +7,10 @@ const RENDER_WIDTH = 720;
 /** Built-in PDF fonts lack the flat/sharp signs. */
 const plain = (s: string): string => s.replace(/♭/g, 'b').replace(/♯/g, '#');
 
-/** Render the lick to an A4 portrait PDF and trigger a download. jsPDF and svg2pdf load on demand. */
+/** Render the lick to an A4 portrait PDF and trigger a download. `opts.showTab` defaults to "the instrument has a tab". jsPDF and svg2pdf load on demand. */
 export async function exportPdf(
-  lick: Lick, inst: Instrument, tabOpts: Pick<RenderOptions, 'tabPosition' | 'showFingers'> = {},
+  lick: Lick, inst: Instrument,
+  opts: Pick<RenderOptions, 'showTab' | 'tabPosition' | 'showFingers' | 'noteLabels'> = {},
 ): Promise<void> {
   const [{ jsPDF }, svg2pdfMod] = await Promise.all([import('jspdf'), import('svg2pdf.js')]);
   const svg2pdf = svg2pdfMod.svg2pdf;
@@ -18,7 +19,7 @@ export async function exportPdf(
   holder.style.cssText = `position:absolute;left:-10000px;top:0;width:${RENDER_WIDTH}px;background:#fff;`;
   document.body.appendChild(holder);
   try {
-    const svg = renderLick(holder, lick, inst, { print: true, showTab: !!inst.tab, ...tabOpts });
+    const svg = renderLick(holder, lick, inst, { print: true, ...opts, showTab: opts.showTab ?? !!inst.tab });
     if (!svg) throw new Error('Could not render notation for the PDF.');
     // svg2pdf reads font sizes in pt as 0; give text plain unitless pixel sizes.
     for (const el of [svg, ...Array.from(svg.querySelectorAll('[font-size]'))]) {

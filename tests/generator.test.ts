@@ -210,6 +210,10 @@ describe('targetScore (difficulty slider)', () => {
       all.push(...errs);
       // very low targets are bounded below by the simplest possible licks (about 3 points)
       expect(median(errs), `median error at pos ${pos}`).toBeLessThanOrEqual(pos < 10 ? 2.5 : 1.2);
+      if (pos >= 10) {
+        const p90 = [...errs].sort((a, b) => a - b)[Math.floor(errs.length * 0.9)];
+        expect(p90, `p90 error at pos ${pos}`).toBeLessThanOrEqual(3);
+      }
     }
     expect(median(all)).toBeLessThanOrEqual(0.8);
     expect(tierHit / total, 'target tier hit rate').toBeGreaterThanOrEqual(0.85);

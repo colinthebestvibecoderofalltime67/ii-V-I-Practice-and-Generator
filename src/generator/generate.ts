@@ -5,7 +5,7 @@ import { CHORDS } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 import { findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm';
 import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
-import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, tierForScore } from '../difficulty/score';
+import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, scoreToPos, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
 import { type Ev, eventsToNotes, fixJoins, leapPenalty } from './connect';
 
@@ -127,11 +127,30 @@ function fragTripletKinds(f: Fragment): Set<TupletKind> {
   }
   return k;
 }
-function tripletFactor(f: Fragment, tier: Tier): number {
+function tripletFactor(f: Fragment, level: number): number {
   const kinds = fragTripletKinds(f);
   if (!kinds.size) return 1;
-  if (kinds.has('t16') && tier < 4) return 0;
-  return TRIPLET_FACTOR[tier];
+  if (kinds.has('t16') && level < 4) return 0;
+  return lerpTable(TRIPLET_FACTOR_BY_LEVEL, level - 1);
+}
+const TRIPLET_FACTOR_BY_LEVEL = [TRIPLET_FACTOR[1], TRIPLET_FACTOR[2], TRIPLET_FACTOR[3], TRIPLET_FACTOR[4]];
+
+/** Linear interpolation into a table at a fractional index (clamped). Integer indexes return table entries exactly. */
+function lerpTable(t: readonly number[], x: number): number {
+  if (x <= 0) return t[0];
+  if (x >= t.length - 1) return t[t.length - 1];
+  const i = Math.floor(x);
+  const f = x - i;
+  return f === 0 ? t[i] : t[i] + (t[i + 1] - t[i]) * f;
+}
+
+/**
+ * Fractional fragment level aimed at for a slider target: the middle of each tier's quarter of slider travel
+ * maps to that tier's integer level (pos 12.5 -> 1, 37.5 -> 2, 62.5 -> 3, 87.5 -> 4), so targets near a tier
+ * boundary blend the neighbouring levels instead of jumping.
+ */
+export function levelForTarget(score: number): number {
+  return Math.min(4, Math.max(1, 0.5 + scoreToPos(score) / 25));
 }
 
 /** Split a slot's beats into 2/4-beat pieces. 4-beat pieces only start on a bar line. */
@@ -159,7 +178,7 @@ function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
 }
 
 function buildPlan(
-  rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, tier: Tier, sharp: number,
+  rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number,
 ): PlanItem[] {
   const plan: PlanItem[] = [];
   let beat = 0;
@@ -178,8 +197,8 @@ function buildPlan(
       const ending = isLastSlot && pi === parts.length - 1;
       const pool = pools.get(q, b as 2 | 4, ending);
       const frag = rng.weighted(pool, f => {
-        let w = Math.pow(LEVEL_WEIGHT[Math.min(3, Math.abs(f.level - tier))], sharp);
-        w *= tripletFactor(f, tier);
+        let w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
+        w *= tripletFactor(f, level);
         if (f.id === prevId) w *= 0.15;
         if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
         return w;
@@ -351,20 +370,30 @@ export function generateLick(opts: GenerateOptions): Lick {
   const rng = new Rng(seed);
 
   let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number } | null = null;
+  // Without a target the level is the tier (integer, exactly the original weighting). With a target it starts at
+  // the target's fractional level and is nudged each round toward where the candidates actually scored.
+  let level = target !== undefined ? levelForTarget(target) : reqTier;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const sharp = 1 + round * 0.8;
+    const roundScores: number[] = [];
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, reqTier, sharp);
+      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp);
       const octaves = chooseOctaves(plan, chords, opts.range);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range);
       const notes = eventsToNotes(events, chords);
       const cost = lickCost(events, fragStarts, opts.range, fixes);
       const score = scoreLick(notes, chords, def).score;
+      roundScores.push(score);
       const dist = target !== undefined ? Math.abs(score - target) : tierDistance(score, reqTier);
       if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist };
     }
     if (best && best.dist <= tol) break;
+    if (target !== undefined) {
+      const mid = [...roundScores].sort((a, b) => a - b)[roundScores.length >> 1];
+      if (mid > target + tol) level = Math.max(1, level - 0.4);
+      else if (mid < target - tol) level = Math.min(4, level + 0.4);
+    }
   }
   const b = best!;
   // Sanity: contiguity (guards against malformed custom fragments; never expected to trigger)

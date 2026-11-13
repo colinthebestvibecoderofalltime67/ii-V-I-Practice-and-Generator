@@ -9,6 +9,8 @@ import { CHORDS } from '../theory/chords';
 import { chordRootName, keySignatureName, keyUsesSharps, mod12, vexKey } from '../theory/pitch';
 import { type FingeredNote, lickFingerings, pickFingering, roman } from './tab';
 
+export interface NoteLabel { text: string; color?: string }
+
 export interface RenderOptions {
   highlight?: number[];
   showTab?: boolean;
@@ -17,6 +19,11 @@ export interface RenderOptions {
   tabPosition?: 'auto' | number;
   /** Show a suggested finger above every fretted tab note (otherwise only where the hand shifts). */
   showFingers?: boolean;
+  /**
+   * Optional text label per lick note (index into lick.notes; null/undefined = none), drawn in a row under the
+   * standard staff. Used by Analyze for chord degrees. (Implementation: see notation renderer.)
+   */
+  noteLabels?: (NoteLabel | null | undefined)[];
   /** Colour for highlighted (now-playing) notes. Default: burnt orange. */
   highlightColor?: string;
   /** Chord-symbol font. Default: Georgia bold. */

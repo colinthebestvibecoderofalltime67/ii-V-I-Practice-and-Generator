@@ -33,13 +33,13 @@ describe('storage', () => {
   });
 
   it('round-trips settings and sanitizes bad values', () => {
-    store.saveSettings({ ...DEFAULT_SETTINGS, bpm: 150, key: 3, tier: 4 });
-    expect(store.loadSettings()).toMatchObject({ bpm: 150, key: 3, tier: 4 });
+    store.saveSettings({ ...DEFAULT_SETTINGS, bpm: 150, key: 3, target: 88, analyze: true });
+    expect(store.loadSettings()).toMatchObject({ bpm: 150, key: 3, target: 88, analyze: true });
     mem.setItem(KEYS.settings, JSON.stringify({ bpm: 9999, key: 99, tier: 7, progressionId: 'nope', comp: 'x', loop: 'yes', swing: false }));
     const s = store.loadSettings();
     expect(s.bpm).toBe(320);
     expect(s.key).toBe('random');
-    expect(s.tier).toBe(DEFAULT_SETTINGS.tier);
+    expect(s.target).toBe(DEFAULT_SETTINGS.target);
     expect(s.progressionId).toBe(DEFAULT_SETTINGS.progressionId);
     expect(s.comp).toBe(DEFAULT_SETTINGS.comp);
     expect(s.loop).toBe(DEFAULT_SETTINGS.loop);
@@ -49,6 +49,13 @@ describe('storage', () => {
     mem.setItem(KEYS.settings, JSON.stringify({ straight16: false }));
     expect(store.loadSettings().straight16).toBe(false);
     expect(sanitizeSettings('junk')).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('migrates the old tier setting to a slider position and validates target', () => {
+    expect([1, 2, 3, 4].map(tier => sanitizeSettings({ tier }).target)).toEqual([12, 37, 62, 87]);
+    expect(sanitizeSettings({ target: 80, tier: 1 }).target).toBe(80);
+    expect(sanitizeSettings({ target: 101 }).target).toBe(DEFAULT_SETTINGS.target);
+    expect(sanitizeSettings({ target: 3.5 }).target).toBe(DEFAULT_SETTINGS.target);
   });
 
   it('history is newest-first, deduped by id and capped', () => {

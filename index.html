@@ -35,6 +35,10 @@
         <p id="lick-meta" class="muted"></p>
       </div>
       <div class="lick-actions">
+        <button type="button" id="t-analyze" class="btn" aria-pressed="false" aria-keyshortcuts="A" title="Show scale degrees and the scale of each chord (A)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+          <span>Analyze</span>
+        </button>
         <button type="button" id="t-fav" class="btn" aria-pressed="false">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path id="fav-star" d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>
           <span id="fav-label">Save</span>
@@ -85,14 +89,26 @@
       </div>
     </section>
 
+    <section class="analysis" id="analysis" aria-labelledby="an-h" hidden>
+      <h2 id="an-h" class="label">Analysis</h2>
+      <div class="an-rows" id="an-rows"></div>
+      <ul class="legend small" aria-label="Note colours">
+        <li class="k-chord"><span class="mono">3</span> Chord tone</li>
+        <li class="k-tension"><span class="mono">♭9</span> Tension</li>
+        <li class="k-scale"><span class="mono">4</span> Scale tone</li>
+        <li class="k-chrom"><span class="mono">♯4</span> Chromatic</li>
+      </ul>
+    </section>
+
     <section class="difficulty" aria-labelledby="diff-h">
       <div class="diff-summary">
         <h2 id="diff-h" class="label">Difficulty</h2>
         <div class="diff-top"><span id="tier-name" class="tier-name"></span><span id="tier-score" class="mono muted-2"></span></div>
         <div class="scale" aria-hidden="true">
-          <div class="scale-track"><div class="scale-fill" id="scale-fill"></div><div class="scale-mark" id="scale-mark"></div>
-            <span class="tick" style="left:7%"></span><span class="tick" style="left:15%"></span><span class="tick" style="left:44%"></span></div>
-          <div class="scale-labels mono"><span style="left:0">Beg</span><span style="left:7.5%">Int</span><span style="left:15.5%">Adv</span><span style="left:44.5%">Expert</span></div>
+          <div class="scale-track"><div class="scale-fill" id="scale-fill"></div><div class="scale-target" id="scale-target" hidden></div><div class="scale-mark" id="scale-mark"></div>
+            <span class="tick" style="left:25%"></span><span class="tick" style="left:50%"></span><span class="tick" style="left:75%"></span></div>
+          <div class="scale-labels mono"><span style="left:12.5%">Beginner</span><span style="left:37.5%">Intermediate</span><span style="left:62.5%">Advanced</span><span style="left:87.5%">Expert</span></div>
+          <p class="small muted-2 scale-key" id="scale-key" hidden><span class="target-glyph" aria-hidden="true"></span> where you aimed</p>
         </div>
         <p class="small muted-2">Scored from the notes themselves. Tempo isn’t counted, so slow it down as much as you need.</p>
       </div>
@@ -112,7 +128,13 @@
     </fieldset>
     <fieldset class="group">
       <legend class="label">Difficulty</legend>
-      <div id="tier-list" class="radio-list tiers"></div>
+      <div class="target">
+        <input type="range" id="r-target" min="0" max="100" step="1" aria-label="Difficulty">
+        <div class="target-ticks" aria-hidden="true"><i style="--p:.25"></i><i style="--p:.5"></i><i style="--p:.75"></i></div>
+        <div class="target-names" aria-hidden="true"><span>Beginner</span><span>Intermediate</span><span>Advanced</span><span>Expert</span></div>
+      </div>
+      <p class="target-read" id="target-read"><strong id="target-tier"></strong> <span class="mono muted" id="target-score"></span></p>
+      <p class="small muted" id="target-desc"></p>
       <p class="small warn" id="tier-hint" hidden></p>
     </fieldset>
     <div class="group fields">
@@ -166,6 +188,7 @@
   <dl class="keys">
     <dt><kbd class="mono">Space</kbd></dt><dd>Play / pause</dd>
     <dt><kbd class="mono">G</kbd></dt><dd>Generate a new lick</dd>
+    <dt><kbd class="mono">A</kbd></dt><dd>Show / hide analysis</dd>
     <dt><kbd class="mono">Esc</kbd></dt><dd>Close a panel or menu</dd>
   </dl>
 </dialog>

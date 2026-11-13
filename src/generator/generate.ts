@@ -4,7 +4,7 @@ import { FRAGMENTS } from '../fragments';
 import { CHORDS } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
-import { TIER_THRESHOLDS, scoreLick } from '../difficulty/score';
+import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
 import { type Ev, eventsToNotes, fixJoins, leapPenalty } from './connect';
 
@@ -13,6 +13,11 @@ export interface GenerateOptions {
   length: LengthId;
   keyPc: number;
   tier: Tier;
+  /**
+   * Optional exact difficulty score (0..100) to aim for, e.g. posToScore(sliderPosition). When given,
+   * `tier` is ignored: the tier is tierForScore(targetScore) and the candidate closest to the score wins.
+   */
+  targetScore?: number;
   /** CONCERT comfortable range (use concertRange(inst)). */
   range: [number, number];
   /** default: random */
@@ -289,7 +294,17 @@ function tierDistance(score: number, tier: Tier): number {
   return 0;
 }
 
+/** How close (in score points) a candidate must be to a target score to stop searching. */
+function scoreTolerance(tier: Tier): number {
+  const lo = tier === 1 ? 0 : TIER_THRESHOLDS[tier - 2];
+  const hi = tier === 4 ? SCORE_CEIL : TIER_THRESHOLDS[tier - 1];
+  return Math.max(2, 0.12 * (hi - lo));
+}
+
 export function generateLick(opts: GenerateOptions): Lick {
+  const target = opts.targetScore !== undefined && Number.isFinite(opts.targetScore) ? opts.targetScore : undefined;
+  const reqTier: Tier = target !== undefined ? tierForScore(target) : opts.tier;
+  const tol = target !== undefined ? scoreTolerance(reqTier) : 0;
   const def = getProgression(opts.progressionId);
   const seed = (opts.seed ?? randomSeed()) >>> 0;
   const keyPc = mod12(opts.keyPc);
@@ -303,16 +318,17 @@ export function generateLick(opts: GenerateOptions): Lick {
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const sharp = 1 + round * 0.8;
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, opts.tier, sharp);
+      const plan = buildPlan(rng, chords, slotBeats, pools, reqTier, sharp);
       const octaves = chooseOctaves(plan, chords, opts.range);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range);
       const notes = eventsToNotes(events, chords);
       const cost = lickCost(events, fragStarts, opts.range, fixes);
-      const dist = tierDistance(scoreLick(notes, chords, def).score, opts.tier);
+      const score = scoreLick(notes, chords, def).score;
+      const dist = target !== undefined ? Math.abs(score - target) : tierDistance(score, reqTier);
       if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist };
     }
-    if (best && best.dist === 0) break;
+    if (best && best.dist <= tol) break;
   }
   const b = best!;
   // Sanity: contiguity (guards against malformed custom fragments; never expected to trigger)
@@ -321,13 +337,14 @@ export function generateLick(opts: GenerateOptions): Lick {
 
   return {
     version: 2,
-    id: makeId(def.id, opts.length, keyPc, opts.tier, seed),
+    id: makeId(def.id, opts.length, keyPc, reqTier, seed),
     seed,
     progressionId: def.id,
     length: opts.length,
     keyPc,
     mode: def.mode,
-    requestedTier: opts.tier,
+    requestedTier: reqTier,
+    ...(target !== undefined ? { targetScore: target } : {}),
     chords,
     notes: b.notes,
     totalTicks,

@@ -151,6 +151,8 @@ export interface Lick {
   mode: Mode;
   /** The tier the user asked for. */
   requestedTier: Tier;
+  /** Exact difficulty score (0..100) the user aimed for with the slider. Absent on older licks. */
+  targetScore?: number;
   chords: LickChord[];
   notes: LickNote[];
   totalTicks: number;

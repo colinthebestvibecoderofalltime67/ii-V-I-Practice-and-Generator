@@ -8,7 +8,8 @@ import type { CompStyle } from '../audio/comping';
 export interface Settings {
   progressionId: string;
   length: keyof typeof LENGTHS;
-  tier: 1 | 2 | 3 | 4;
+  /** Difficulty slider position, integer 0..100 (see difficulty/score.ts posToScore). */
+  target: number;
   instrumentId: string;
   /** 'random' or a concert pitch class 0..11. */
   key: 'random' | number;
@@ -30,12 +31,14 @@ export interface Settings {
   tabPosition: 'auto' | string;
   /** Show finger numbers on every tab note. */
   showFingers: boolean;
+  /** Show scale-degree labels and the scale of each chord. */
+  analyze: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   progressionId: 'major-251',
   length: 'standard',
-  tier: 2,
+  target: 37,
   instrumentId: 'alto',
   key: 'random',
   bpm: 120,
@@ -54,7 +57,11 @@ export const DEFAULT_SETTINGS: Settings = {
   midiBacking: true,
   tabPosition: 'auto',
   showFingers: false,
+  analyze: false,
 };
+
+/** Old `tier` setting -> middle of that tier's slider band. */
+const LEGACY_TIER_TARGET: Record<number, number> = { 1: 12, 2: 37, 3: 62, 4: 87 };
 
 /** Labels that positionsForLick can produce. */
 export const TAB_POSITION_RE = /^(Open pos\.|Pos\. [IVX]{1,6})$/;
@@ -85,6 +92,7 @@ export function isValidLick(v: unknown): v is Lick {
   if (![1, 2, 3, 4].includes(v.requestedTier as number)) return false;
   if (!Array.isArray(v.chords) || v.chords.length === 0 || !Array.isArray(v.notes) || v.notes.length === 0) return false;
   if (!Array.isArray(v.fragmentIds) || !isNum(v.createdAt)) return false;
+  if (v.targetScore !== undefined && !isNum(v.targetScore)) return false;
   if (v.cellStarts !== undefined && !(Array.isArray(v.cellStarts) && v.cellStarts.every(isNum))) return false;
   for (const c of v.chords) {
     if (!isObj(c) || !isNum(c.rootPc) || typeof c.quality !== 'string' || typeof c.symbol !== 'string' || !isNum(c.start) || !isNum(c.dur)) return false;
@@ -124,7 +132,8 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (!isObj(raw)) return s;
   if (typeof raw.progressionId === 'string' && PROGRESSIONS.some(p => p.id === raw.progressionId)) s.progressionId = raw.progressionId;
   if (typeof raw.length === 'string' && raw.length in LENGTHS) s.length = raw.length as Settings['length'];
-  if (isNum(raw.tier) && [1, 2, 3, 4].includes(raw.tier)) s.tier = raw.tier as Settings['tier'];
+  if (isNum(raw.target) && Number.isInteger(raw.target) && raw.target >= 0 && raw.target <= 100) s.target = raw.target;
+  else if (isNum(raw.tier) && [1, 2, 3, 4].includes(raw.tier)) s.target = LEGACY_TIER_TARGET[raw.tier]; // migrate the old 4-way setting
   if (typeof raw.instrumentId === 'string' && INSTRUMENTS.some(i => i.id === raw.instrumentId)) s.instrumentId = raw.instrumentId;
   if (raw.key === 'random') s.key = 'random';
   else if (isNum(raw.key) && Number.isInteger(raw.key) && raw.key >= 0 && raw.key < 12) s.key = raw.key;
@@ -133,7 +142,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (isNum(raw.pianoVolume)) s.pianoVolume = clamp(raw.pianoVolume, 0, 1);
   if (raw.comp === 'rootless' || raw.comp === 'block' || raw.comp === 'sparse') s.comp = raw.comp;
   if (typeof raw.tabPosition === 'string' && (raw.tabPosition === 'auto' || TAB_POSITION_RE.test(raw.tabPosition))) s.tabPosition = raw.tabPosition;
-  for (const k of ['slow', 'piano', 'loop', 'swing', 'straight16', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking'] as const) {
+  for (const k of ['slow', 'piano', 'loop', 'swing', 'straight16', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking', 'analyze'] as const) {
     if (isBool(raw[k])) s[k] = raw[k];
   }
   return s;

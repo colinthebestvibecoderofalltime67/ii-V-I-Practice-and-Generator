@@ -177,8 +177,28 @@ function makeTabNote(p: Piece, pos: FingeredNote | null): StaveNote {
   }
   const t = new TabNote({ positions: [{ str: pos.str, fret: p.cont ? '' : pos.fret }], duration: d + 'd'.repeat(dots) }, true);
   t.setStemDirection(-1);
-  if (dots) { const dot = new Dot(); dot.setDotShiftY(-1.3); t.addModifier(dot, 0); }
   return t as unknown as StaveNote;
+}
+
+/**
+ * Augmentation dots on full-tab notes. VexFlow's TabNote dots land unreliably (often hidden by the tab lines),
+ * so draw them by hand: just right of the stem, in the gap between the tab staff and the beams.
+ */
+function drawTabDots(ctx: ReturnType<Renderer['getContext']>, notes: StaveNote[], pcs: Piece[], color: string): void {
+  notes.forEach((n, i) => {
+    if (n.isRest() || !(DUR_NAME[pcs[i].disp]?.[1] > 0)) return;
+    const tn = n as unknown as TabNote;
+    let ext: { topY: number; baseY: number };
+    try { ext = tn.getStemExtents(); } catch { return; }
+    const x = tn.getStemX() + 5;
+    const y = Math.min(ext.topY, ext.baseY) + 7;
+    ctx.save();
+    ctx.setFillStyle(color);
+    ctx.beginPath();
+    ctx.arc(x, y, 1.7, 0, Math.PI * 2, false);
+    ctx.fill();
+    ctx.restore();
+  });
 }
 
 /** Beams for one bar: triplet groups beam as their own unit; the rest beams per beat and never joins a triplet. */
@@ -423,7 +443,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const tabH = showTab ? (tabLines - 1) * tabSpacing : 0;
   const TAB_ANNOT = 24; // room above the tab for position labels and finger numbers
   const tabGap = 6 + (showTab ? TAB_ANNOT : 0);
-  const LABEL_BAND = hasLabels ? 16 : 0; // note-label row between the staff and the tab
+  const LABEL_BAND = hasLabels ? 22 : 0; // note-label row between the staff and the tab
   const TAB_BELOW = 54 + (hasTuplets ? 12 : 0); // full tab: stems, beams and triplet numbers hang below the tab staff
   const sysH = topLineOff + staffH + belowStaff + LABEL_BAND + (showTab ? tabGap + tabH + TAB_BELOW : 0);
   const totalH = Math.ceil(MARGIN + systems.length * sysH + 6);
@@ -577,6 +597,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
         B.tabVoice.draw(ctx, tst);
         drawBeams(tabBeams, B.tabNotes);
         B.tabTuplets.forEach(t => t.setTupletLocation(Tuplet.LOCATION_BOTTOM).setContext(ctx).draw());
+        drawTabDots(ctx, B.tabNotes, B.pieces, '#000');
         drawTabMarks(B, pieceBase[b], tst.getYForLine(0));
       }
       if (hasLabels) drawLabels(B, b, si, topLineY + staffH + belowStaff);

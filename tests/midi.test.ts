@@ -115,3 +115,26 @@ describe('lickToMidi', () => {
     expect(swung[1].t).toBe(320); // 2/3 of a beat
   });
 });
+
+describe('lickToMidi feel', () => {
+  const mk = (notes: [number, number][]): Lick => ({
+    ...lick,
+    notes: notes.map(([s, d]) => ({ midi: 60, start: s, dur: d, chord: 0 })),
+    totalTicks: 3 * TPBAR,
+  });
+  const base = { bpm: 120, swing: true, comping: false, comp: 'rootless' as const };
+  it('writes 8th triplets at 0/160/320 ticks', () => {
+    const l = mk([[0, 4], [4, 4], [8, 4], [12, 36], [48, 48], [96, 48]]);
+    for (const swing of [true, false]) {
+      const t = ons(parse(lickToMidi(l, { ...base, swing, straight16: true })).tracks[1]).map(e => e.t);
+      expect(t.slice(0, 4)).toEqual([0, 160, 320, 480]);
+    }
+  });
+  it('keeps 16ths straight with swing on when straight16', () => {
+    const l = mk([[0, 3], [3, 3], [6, 3], [9, 3], [12, 36], [48, 48], [96, 48]]);
+    const straight = ons(parse(lickToMidi(l, { ...base, straight16: true })).tracks[1]).map(e => e.t);
+    expect(straight.slice(0, 4)).toEqual([0, 120, 240, 360]);
+    const legacy = ons(parse(lickToMidi(l, base)).tracks[1]).map(e => e.t);
+    expect(legacy[2]).toBe(320);
+  });
+});

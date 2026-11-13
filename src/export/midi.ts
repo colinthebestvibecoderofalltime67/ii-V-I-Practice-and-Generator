@@ -1,7 +1,7 @@
 import type { Lick } from '../types';
 import { TPB } from '../types';
 import { bassEvents, compEvents, type CompEvent, type CompStyle } from '../audio/comping';
-import { soundingNotes, tickToBeats } from '../audio/timing';
+import { makeTimeline, soundingNotes, type Timeline } from '../audio/timing';
 
 const PPQ = 480;
 
@@ -9,6 +9,8 @@ export interface MidiOptions {
   bpm: number; swing: boolean; comping: boolean; comp: CompStyle;
   /** General MIDI program for the lead (default 66 alto sax). */
   program?: number;
+  /** With swing: keep 16th-note beats straight (default false = legacy swung 16ths). */
+  straight16?: boolean;
 }
 
 interface Ev { t: number; order: number; bytes: number[] }
@@ -33,13 +35,13 @@ function trackChunk(events: Ev[], endTick: number): number[] {
   return [0x4d, 0x54, 0x72, 0x6b, (len >>> 24) & 255, (len >>> 16) & 255, (len >>> 8) & 255, len & 255, ...body];
 }
 
-const tk = (tick: number, swing: boolean) => Math.round(tickToBeats(tick, swing) * PPQ);
+const tk = (tick: number, tl: Timeline) => Math.round(tl(tick) * PPQ);
 
-function noteEvents(list: { midi: number[]; tick: number; dur: number }[], ch: number, vel: number, swing: boolean): Ev[] {
+function noteEvents(list: { midi: number[]; tick: number; dur: number }[], ch: number, vel: number, tl: Timeline): Ev[] {
   const ev: Ev[] = [];
   for (const n of list) {
-    const on = tk(n.tick, swing);
-    const off = Math.max(on + 1, tk(n.tick + n.dur, swing));
+    const on = tk(n.tick, tl);
+    const off = Math.max(on + 1, tk(n.tick + n.dur, tl));
     for (const m of n.midi) {
       ev.push({ t: on, order: 1, bytes: [0x90 | ch, m & 127, vel] });
       ev.push({ t: off, order: 0, bytes: [0x80 | ch, m & 127, 0] });
@@ -49,7 +51,7 @@ function noteEvents(list: { midi: number[]; tick: number; dur: number }[], ch: n
 }
 
 export function lickToMidi(lick: Lick, opts: MidiOptions): Uint8Array {
-  const swing = opts.swing;
+  const tl = makeTimeline(lick.notes, { swing: opts.swing, straight16: opts.straight16 ?? false });
   const bpm = Math.min(320, Math.max(20, opts.bpm));
   const endTick = Math.round((lick.totalTicks / TPB) * PPQ);
 
@@ -64,7 +66,7 @@ export function lickToMidi(lick: Lick, opts: MidiOptions): Uint8Array {
   const lead: Ev[] = [
     { t: 0, order: -2, bytes: meta(0x03, str('Lead')) },
     { t: 0, order: -1, bytes: [0xc0, (opts.program ?? 66) & 127] },
-    ...noteEvents(leadList, 0, 96, swing),
+    ...noteEvents(leadList, 0, 96, tl),
   ];
 
   const tracks = [trackChunk(conductor, endTick), trackChunk(lead, endTick)];
@@ -72,12 +74,12 @@ export function lickToMidi(lick: Lick, opts: MidiOptions): Uint8Array {
     const piano: Ev[] = [
       { t: 0, order: -2, bytes: meta(0x03, str('Piano')) },
       { t: 0, order: -1, bytes: [0xc1, 0] },
-      ...noteEvents(compEvents(lick.chords, opts.comp), 1, 64, swing),
+      ...noteEvents(compEvents(lick.chords, opts.comp), 1, 64, tl),
     ];
     const bass: Ev[] = [
       { t: 0, order: -2, bytes: meta(0x03, str('Bass')) },
       { t: 0, order: -1, bytes: [0xc2, 32] },
-      ...noteEvents(bassEvents(lick.chords), 2, 88, swing),
+      ...noteEvents(bassEvents(lick.chords), 2, 88, tl),
     ];
     tracks.push(trackChunk(piano, endTick), trackChunk(bass, endTick));
   }

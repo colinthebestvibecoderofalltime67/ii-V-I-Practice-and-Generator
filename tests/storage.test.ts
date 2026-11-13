@@ -44,6 +44,10 @@ describe('storage', () => {
     expect(s.comp).toBe(DEFAULT_SETTINGS.comp);
     expect(s.loop).toBe(DEFAULT_SETTINGS.loop);
     expect(s.swing).toBe(false);
+    expect(s.straight16).toBe(true);
+    expect(DEFAULT_SETTINGS.straight16).toBe(true);
+    mem.setItem(KEYS.settings, JSON.stringify({ straight16: false }));
+    expect(store.loadSettings().straight16).toBe(false);
     expect(sanitizeSettings('junk')).toEqual(DEFAULT_SETTINGS);
   });
 

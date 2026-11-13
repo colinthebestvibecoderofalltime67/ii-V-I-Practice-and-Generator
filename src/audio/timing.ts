@@ -1,5 +1,6 @@
 import type { Lick } from '../types';
 import { TICKS_PER_16TH, TPB } from '../types';
+import { findTupletGroups } from '../theory/rhythm';
 
 /** Fraction of a beat taken by the first eighth of a swung pair (triplet feel). */
 export const SWING_RATIO = 2 / 3;
@@ -26,6 +27,49 @@ export function tickToBeats(tick: number, swing: boolean): number {
 /** Duration in beats of the span [tick, tick+dur) with swing applied to both ends. */
 export function spanBeats(tick: number, dur: number, swing: boolean): number {
   return tickToBeats(tick + dur, swing) - tickToBeats(tick, swing);
+}
+
+export interface FeelOptions { swing: boolean; straight16: boolean }
+/** Maps a tick to a position in beats. */
+export type Timeline = (tick: number) => number;
+
+/**
+ * Per-beat swing feel, decided from the lick's note onsets/offsets (rests included):
+ *  - swing off: linear.
+ *  - beats touching a triplet (off-grid boundary, or inside a triplet group): linear (exact thirds).
+ *  - beats with 16th boundaries (offset 3 or 9): linear if `straight16`, else the legacy swung-16th anchors.
+ *  - other beats (on-beat / offset-6 events only): swung eighths (offset 6 -> SWING_RATIO).
+ * Beat starts always map to integer beats, so the mapping is continuous and monotonic.
+ */
+export function makeTimeline(
+  notes: readonly { start: number; dur: number; midi?: number | null }[],
+  opts: FeelOptions,
+): Timeline {
+  if (!opts.swing) return tick => tick / TPB;
+  const linear: boolean[] = [];
+  const has16: boolean[] = [];
+  const mark = (arr: boolean[], b: number): void => { while (arr.length <= b) arr.push(false); arr[b] = true; };
+  for (const n of notes) {
+    for (const t of [n.start, n.start + n.dur]) {
+      const r = ((t % TPB) + TPB) % TPB;
+      const b = Math.floor(t / TPB);
+      if (r % TICKS_PER_16TH !== 0) mark(linear, b);
+      else if (r === TICKS_PER_16TH || r === 3 * TICKS_PER_16TH) mark(has16, b);
+    }
+  }
+  for (const g of findTupletGroups(notes).groups) {
+    for (let b = Math.floor(g.start / TPB); b <= Math.floor((g.end - 1) / TPB); b++) mark(linear, b);
+  }
+  return tick => {
+    const b = Math.floor(tick / TPB);
+    if (linear[b] || (opts.straight16 && has16[b])) return tick / TPB;
+    return tickToBeats(tick, true);
+  };
+}
+
+/** Duration in beats of [tick, tick+dur) under a timeline. */
+export function timelineSpan(tl: Timeline, tick: number, dur: number): number {
+  return tl(tick + dur) - tl(tick);
 }
 
 export interface SoundingNote {

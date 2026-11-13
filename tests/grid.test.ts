@@ -9,6 +9,7 @@ import { SWING_RATIO, tickToBeats } from '../src/audio/timing';
 import { scoreLick } from '../src/difficulty/score';
 import { lickToMidi } from '../src/export/midi';
 import { AUTHORED_FRAGMENTS, AUTHORED_UNIT, FRAGMENTS, fromSixteenths } from '../src/fragments';
+import { TRIPLET_FRAGMENTS } from '../src/fragments/lib/triplets';
 import { generateLick } from '../src/generator';
 import { concertRange, getInstrument } from '../src/instruments';
 import { barOf, beatOf, splitDur } from '../src/theory/rhythm';
@@ -16,6 +17,9 @@ import { expandProgression, getProgression } from '../src/theory/progressions';
 import { RENDERABLE_DURS, TICKS_PER_16TH, TPB, TPBAR, TRIPLET_DURS, type LickNote } from '../src/types';
 
 const range = concertRange(getInstrument('tenor'));
+// The pinned licks below were produced before the triplet library existed, so they are generated from the 16th-grid
+// libraries only (same pool as then). Adding fragments to the pool legitimately changes seeded output.
+const LEGACY_POOL = AUTHORED_FRAGMENTS.map(fromSixteenths);
 
 describe('grid constants', () => {
   it('are consistent', () => {
@@ -58,8 +62,9 @@ describe('splitDur / bar helpers', () => {
 
 describe('fragments are authored in 16ths and scaled on load', () => {
   it('scales every duration by 3 without mutating the authored data', () => {
-    expect(FRAGMENTS.length).toBe(AUTHORED_FRAGMENTS.length);
-    FRAGMENTS.forEach((f, i) => {
+    // FRAGMENTS = scaled 16th-grid libraries + the triplet library (already on the engine grid, appended last)
+    expect(FRAGMENTS.length).toBe(AUTHORED_FRAGMENTS.length + TRIPLET_FRAGMENTS.length);
+    FRAGMENTS.slice(0, AUTHORED_FRAGMENTS.length).forEach((f, i) => {
       const a = AUTHORED_FRAGMENTS[i];
       expect(f.id).toBe(a.id);
       expect(f.notes.length).toBe(a.notes.length);
@@ -118,7 +123,7 @@ describe('scoreLick on the prototype licks equals the pre-migration scores', () 
 });
 
 describe('generator output on the new grid', () => {
-  const lick = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 3, range, seed: 3 });
+  const lick = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 3, range, seed: 3, fragments: LEGACY_POOL });
   it('is version 2 and every start/dur is a multiple of a 16th (3 ticks)', () => {
     expect(lick.version).toBe(2);
     expect(lick.totalTicks).toBe(3 * TPBAR);
@@ -139,7 +144,7 @@ describe('generator output on the new grid', () => {
     expect(lick.notes.length).toBe(26);
   });
   it('exports byte-identical MIDI (sha1 of files dumped before the migration)', () => {
-    const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, range, seed: 3 });
+    const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, range, seed: 3, fragments: LEGACY_POOL });
     expect(l.difficulty.score).toBe(45.9);
     const sha = (swing: boolean, comping: boolean) =>
       createHash('sha1').update(lickToMidi(l, { bpm: 120, swing, comping, comp: 'rootless' })).digest('hex');

@@ -5,6 +5,7 @@ import { generateLick } from '../src/generator';
 import { TIER_THRESHOLDS } from '../src/difficulty/score';
 import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
 import { pcName } from '../src/theory/pitch';
+import { findTupletGroups, type TupletKind } from '../src/theory/rhythm';
 import { TIER_NAMES, type LengthId, type Lick, type Tier } from '../src/types';
 
 const PER_TIER = Number(process.env.N ?? 200);
@@ -73,6 +74,22 @@ for (const t of TIERS) {
   console.log(`Tier ${t}:`, [...acc.values()].sort((a, b) => b.pts - a.pts).slice(0, 5).map(a => `${a.label} ${a.pts.toFixed(1)}pts (${a.val.toFixed(1)})`).join(' | '));
 }
 
+console.log('\n== Licks containing triplets, % of licks per requested tier (any / by kind) ==');
+{
+  const KINDS: TupletKind[] = ['t8', 'tq', 't16'];
+  const rows: Record<string, Record<string, number>> = {};
+  for (const t of TIERS) {
+    const kinds = byTier[t].map(l => new Set(findTupletGroups(l.notes).groups.map(g => g.kind)));
+    const pct = (n: number) => +(100 * n / byTier[t].length).toFixed(1);
+    rows[`${t} ${TIER_NAMES[t]}`] = {
+      any: pct(kinds.filter(k => k.size > 0).length),
+      ...Object.fromEntries(KINDS.map(k => [k, pct(kinds.filter(x => x.has(k)).length)])),
+    };
+  }
+  console.table(rows);
+  console.log(`Triplet library: ${FRAGMENTS.filter(f => f.id.includes('-trip-')).length} of ${FRAGMENTS.length} fragments.`);
+}
+
 function show(l: Lick) {
   const name = (m: number) => pcName(m, l.keyPc, l.mode) + (Math.floor(m / 12) - 1);
   // durations are written in engine ticks: 3=16th 6=8th 12=quarter 24=half 48=whole; '~' = tied
@@ -89,6 +106,7 @@ function show(l: Lick) {
 console.log('\n== Sample licks ==');
 for (const t of TIERS) {
   console.log(`\nTier ${t} ${TIER_NAMES[t]}`);
-  show(byTier[t][0]);
-  show(byTier[t][PROGRESSIONS.length * 3 + 2]);
+  // a couple of licks per tier, plus the first lick that contains a triplet (if any)
+  const picks = [byTier[t][0], byTier[t][PROGRESSIONS.length * 3 + 2], byTier[t].find(l => findTupletGroups(l.notes).groups.length > 0)];
+  for (const l of new Set(picks)) if (l) show(l);
 }

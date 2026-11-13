@@ -3,6 +3,7 @@ import { RENDERABLE_DURS, TPB } from '../types';
 import { FRAGMENTS } from '../fragments';
 import { CHORDS } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
+import { findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm';
 import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
 import { TIER_THRESHOLDS, scoreLick } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
@@ -28,17 +29,27 @@ const MAX_ROUNDS = 3;
 
 const RENDERABLE = new Set<number>(RENDERABLE_DURS);
 
-/** A fragment is usable only if its durations fill its beats exactly and ties are consistent. */
-function isValidFragment(f: Fragment): boolean {
+/**
+ * A fragment is usable only if its durations fill its beats exactly, ties are consistent and triplets are well formed:
+ *  - every non-triplet duration is renderable; triplet durations (not multiples of a 16th) must form valid groups
+ *    (findTupletGroups: exact span, aligned start, units of 1 or 2) -- fragments start on a beat, and 4-beat
+ *    fragments on a bar line, so group alignment inside the fragment equals alignment in the lick;
+ *  - no tie into, out of or inside a triplet group (v1 keeps triplets tie-free).
+ */
+export function isValidFragment(f: Fragment): boolean {
   if (!f.notes.length) return false;
   let sum = 0;
+  const timed: { start: number; dur: number }[] = [];
   for (let i = 0; i < f.notes.length; i++) {
     const n = f.notes[i];
-    if (!RENDERABLE.has(n.dur)) return false;
+    if (!isTupletDur(n.dur) && !RENDERABLE.has(n.dur)) return false;
+    if (isTupletDur(n.dur) && (n.tie || (i > 0 && f.notes[i - 1].tie))) return false;
+    timed.push({ start: sum, dur: n.dur });
     sum += n.dur;
     if (n.tie && (n.rel == null || i + 1 >= f.notes.length || f.notes[i + 1].rel !== n.rel)) return false;
   }
-  return sum === f.beats * TPB && f.notes.some(n => n.rel != null);
+  if (sum !== f.beats * TPB || !f.notes.some(n => n.rel != null)) return false;
+  return findTupletGroups(timed).errors.length === 0;
 }
 
 /** Simple guide-tone / arpeggio fragment, used only when the library has nothing for a combination. */
@@ -94,6 +105,30 @@ interface PlanItem {
 
 const LEVEL_WEIGHT = [1, 0.3, 0.06, 0.02];
 
+/**
+ * Triplet fragments are a flavour, not the default texture. Their weight is scaled per requested tier:
+ * never for Beginner, freely at Intermediate (where only simple 8th-triplet arpeggios and the odd enclosure exist),
+ * damped at Advanced/Expert where many more fragments (and the triplet-scoring) compete. 16th-triplets are Expert only.
+ * Fragments without triplets are untouched (factor 1), so pools without triplets draw exactly as before.
+ */
+const TRIPLET_FACTOR: Record<Tier, number> = { 1: 0, 2: 1, 3: 0.22, 4: 0.12 };
+const tripletKinds = new WeakMap<Fragment, Set<TupletKind>>();
+function fragTripletKinds(f: Fragment): Set<TupletKind> {
+  let k = tripletKinds.get(f);
+  if (!k) {
+    let t = 0;
+    k = new Set(findTupletGroups(f.notes.map(n => { const r = { start: t, dur: n.dur }; t += n.dur; return r; })).groups.map(g => g.kind));
+    tripletKinds.set(f, k);
+  }
+  return k;
+}
+function tripletFactor(f: Fragment, tier: Tier): number {
+  const kinds = fragTripletKinds(f);
+  if (!kinds.size) return 1;
+  if (kinds.has('t16') && tier < 4) return 0;
+  return TRIPLET_FACTOR[tier];
+}
+
 /** Split a slot's beats into 2/4-beat pieces. 4-beat pieces only start on a bar line. */
 function partitionSlot(rng: Rng, slotBeats: number, startBeat: number, endingPiece: 2 | 4 | null): number[] {
   const tail = endingPiece ?? 0;
@@ -139,6 +174,7 @@ function buildPlan(
       const pool = pools.get(q, b as 2 | 4, ending);
       const frag = rng.weighted(pool, f => {
         let w = Math.pow(LEVEL_WEIGHT[Math.min(3, Math.abs(f.level - tier))], sharp);
+        w *= tripletFactor(f, tier);
         if (f.id === prevId) w *= 0.15;
         if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
         return w;

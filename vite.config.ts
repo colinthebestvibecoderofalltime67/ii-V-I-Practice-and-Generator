@@ -6,5 +6,8 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'node',
+    // Many tests generate hundreds of licks to check musical statistics (a lick takes ~10 ms, more on CI runners), so
+    // the 5 s default is too tight for them; a real hang still fails.
+    testTimeout: 30_000,
   },
 });

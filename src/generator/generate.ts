@@ -7,7 +7,7 @@ import { findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm
 import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
 import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, scoreToPos, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
-import { type Ev, eventsToNotes, fixJoins, leapPenalty } from './connect';
+import { type Ev, eventsToNotes, fixJoins, leapPenalty, phraseEvents } from './connect';
 
 export interface GenerateOptions {
   progressionId: string;
@@ -172,6 +172,18 @@ function partitionSlot(rng: Rng, slotBeats: number, startBeat: number, endingPie
   return out;
 }
 
+/** Pitch content (rel pitches) and melodic shape (intervals) of a fragment, to spot loops across different ids. */
+const fragSigs = new WeakMap<Fragment, { rels: string; shape: string }>();
+function fragSig(f: Fragment): { rels: string; shape: string } {
+  let s = fragSigs.get(f);
+  if (!s) {
+    const rels = f.notes.filter(n => n.rel != null).map(n => n.rel as number);
+    s = { rels: rels.map(r => mod12(r)).join(','), shape: rels.slice(1).map((r, i) => r - rels[i]).join(',') };
+    fragSigs.set(f, s);
+  }
+  return s;
+}
+
 function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
   const first = f.notes[0];
   if (first.rel == null) return true;
@@ -195,17 +207,20 @@ function buildPlan(
     const parts = partitionSlot(rng, slotBeats[ci], beat, endingPiece);
     let tick = chord.start;
     let prevId = '';
+    let prevSig: { rels: string; shape: string } | null = null;
     parts.forEach((b, pi) => {
       const ending = isLastSlot && pi === parts.length - 1;
       const pool = pools.get(q, b as 2 | 4, ending);
       const frag = rng.weighted(pool, f => {
         let w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
         w *= tripletFactor(f, level, tier);
-        if (f.id === prevId) w *= 0.15;
+        if (f.id === prevId) w *= 0.05;
+        else if (prevSig && (fragSig(f).rels === prevSig.rels || fragSig(f).shape === prevSig.shape)) w *= 0.12;
         if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
         return w;
       });
       prevId = frag.id;
+      prevSig = fragSig(frag);
       plan.push({ frag, chordIdx: ci, start: tick });
       tick += b * TPB;
       beat += b;
@@ -383,6 +398,7 @@ export function generateLick(opts: GenerateOptions): Lick {
       const octaves = chooseOctaves(plan, chords, opts.range);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range);
+      phraseEvents(rng, events, fragStarts, chords, opts.range, { level });
       const notes = eventsToNotes(events, chords);
       const cost = lickCost(events, fragStarts, opts.range, fixes);
       const score = scoreLick(notes, chords, def).score;

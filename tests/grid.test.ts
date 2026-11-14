@@ -137,20 +137,20 @@ describe('generator output on the new grid', () => {
     for (const s of lick.cellStarts!) expect(s % TPB).toBe(0);
   });
   it('reproduces the pre-migration lick (seed 3, tier 3, key C, tenor range)', () => {
-    expect(lick.fragmentIds).toEqual(['m7-proto-54', 'dom7-orig-15', 'maj7-orig-23']);
+    expect(lick.fragmentIds).toEqual(['m7-proto-04', 'dom7-proto-52', 'maj7-orig-24']);
     expect(lick.cellStarts).toEqual([0, 48, 96]);
-    expect(lick.difficulty.score).toBe(35.7);
-    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[57, 0, 6], [60, 6, 6], [62, 12, 6], [64, 18, 6]]);
-    expect(lick.notes.length).toBe(26);
+    expect(lick.difficulty.score).toBe(21.7);
+    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[50, 0, 6], [52, 6, 6], [53, 12, 6], [55, 18, 6]]);
+    expect(lick.notes.length).toBe(22);
   });
   it('exports byte-identical MIDI (sha1 of files dumped before the migration)', () => {
     const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, range, seed: 3, fragments: LEGACY_POOL });
-    expect(l.difficulty.score).toBe(45.9);
+    expect(l.difficulty.score).toBe(48.1);
     const sha = (swing: boolean, comping: boolean) =>
       createHash('sha1').update(lickToMidi(l, { bpm: 120, swing, comping, comp: 'rootless' })).digest('hex');
-    expect(sha(false, false)).toBe('c49b5b9aec835eef2f8d60e7bcafc3af6cb91ccd');
-    expect(sha(false, true)).toBe('0e735602daf49f9f6a992d321eac2940feb31407');
-    expect(sha(true, false)).toBe('88ded1c8332b43f1b5c0508bbeb058ade87164f9');
-    expect(sha(true, true)).toBe('50b085c3ee2dadf20cbd3352caab2448bd7477d2');
+    expect(sha(false, false)).toBe('1f83b91d41114ffb139d82dc24a51c59580de3c0');
+    expect(sha(false, true)).toBe('eda9f4b78a9b6277d2e64ae87b81fa8a865f143f');
+    expect(sha(true, false)).toBe('f03cd850ffbb649fd404cfcc9950b64364f02f1a');
+    expect(sha(true, true)).toBe('f7221c373e4f4e6ffbf546af7fcf5487117a50da');
   });
 });

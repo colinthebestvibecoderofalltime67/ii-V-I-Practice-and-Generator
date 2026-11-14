@@ -2,6 +2,7 @@ import type { ChordQualityId, Instrument, Lick } from '../types';
 import { CHORDS, inScale, isChordTone } from './chords';
 import { getProgression } from './progressions';
 import { mod12 } from './pitch';
+import { judgedChord } from './rhythm';
 import { chordSymbolText, formatSpelling, spellChordRoot, spellScale } from './spell';
 
 /**
@@ -80,7 +81,7 @@ export function analyzeLick(lick: Lick, inst: Instrument): LickAnalysis {
     const continuation = prevTied;
     prevTied = !!n.tie && n.midi != null;
     if (n.midi == null || continuation) { notes.push(null); return; }
-    const c = lick.chords[n.chord];
+    const c = lick.chords[judgedChord(lick.notes, i)]; // anticipations are labelled against the chord they arrive on
     const kind = noteKind(n.midi, c.rootPc, c.quality);
     let approach = false;
     if (kind === 'chromatic') {

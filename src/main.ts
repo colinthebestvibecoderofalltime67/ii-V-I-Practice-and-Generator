@@ -240,9 +240,12 @@ function tabIndex(): 'auto' | number {
 
 /* ---------------------------------------------------------------- display */
 
+/** Index of the note that most recently started during playback (a tied continuation in a new bar counts). */
+let currentNote = -1;
+
 function activeBar(): number | undefined {
   if (!lick || !highlight.length) return undefined;
-  const n = lick.notes[highlight[0]];
+  const n = lick.notes[currentNote >= 0 && highlight.includes(currentNote) ? currentNote : highlight[0]];
   return n ? barOf(n.start) : undefined;
 }
 
@@ -417,8 +420,9 @@ function startPlayback(): void {
   highlight = [];
   const bars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
   player.play(lick, playOptions(), {
-    onNote: idx => {
+    onNote: (idx, cur) => {
       highlight = idx;
+      currentNote = cur ?? -1;
       const b = activeBar();
       if (b !== undefined) setStatus(`bar ${b + 1} / ${bars}`);
       if (!settings.hide) renderNotation();

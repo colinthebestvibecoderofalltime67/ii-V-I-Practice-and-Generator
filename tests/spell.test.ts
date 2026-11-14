@@ -1,3 +1,4 @@
+import { judgedChord } from '../src/theory/rhythm';
 import { describe, expect, it } from 'vitest';
 import {
   type Spelled, chordSymbolText, formatSpelling, spellChordRoot, spellLick, spellNote, spellScale, spelledPc,
@@ -200,7 +201,7 @@ describe('sweep', () => {
                   const midi = ({ C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 } as Record<string, number>)[s!.letter] + s!.acc + 12 * (s!.octave + 1);
                   expect(midi, label).toBe(n.midi + inst.transpose);
                   if (Math.abs(s!.acc) > 1) { noteDoubles++; noteDoubleKeys.add(`${p.mode} ${keySignatureName(wk, p.mode)}`); }
-                  const c = lick.chords[n.chord];
+                  const c = lick.chords[judgedChord(lick.notes, i)]; // anticipations belong to the chord they arrive on
                   const wroot = spellChordRoot(mod12(c.rootPc + inst.transpose), c.quality, wk, p.mode);
                   const rel = mod12(n.midi - c.rootPc);
                   const tone = CHORDS[c.quality].tones.includes(rel);

@@ -90,3 +90,19 @@ export function findTupletGroups(items: readonly { start: number; dur: number }[
 
 /** Written (displayed) value of a note inside a triplet group, in normal ticks: 3 in the time of 2 => x 3/2. */
 export const tupletDisplayDur = (dur: number): number => (dur * 3) / 2;
+
+/**
+ * The chord a note should be heard against. An anticipation (a note attacked less than a beat before a chord
+ * change and tied across it) belongs to the chord it arrives on; every other note belongs to its own chord.
+ * Spelling, Analyze labels and difficulty scoring all use this, so an anticipated 3rd is a 3rd, not a chromatic note.
+ */
+export function judgedChord(notes: readonly { midi: number | null; start: number; tie?: boolean; chord: number }[], i: number): number {
+  const n = notes[i];
+  if (n.midi == null) return n.chord;
+  let j = i;
+  while (notes[j].tie && notes[j + 1] && notes[j + 1].midi === n.midi) {
+    j++;
+    if (notes[j].chord !== n.chord) return notes[j].start - n.start < TPB ? notes[j].chord : n.chord;
+  }
+  return n.chord;
+}

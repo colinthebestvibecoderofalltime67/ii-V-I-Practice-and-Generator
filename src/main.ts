@@ -15,6 +15,8 @@ import { clampInt, drillKeys, drillStep, type DrillConfig, type DrillOrder } fro
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
 import { Library } from './ui/library';
+import { dayNumber, pickForDay } from './practice/log';
+import { lickContentKey, type PracticeLog } from './practice/log';
 import { parseShareHash, shareUrl } from './share';
 import { downloadBlob, fileName, isTransposing, keyLabel, progressionName, titleKeyLabel } from './ui/format';
 
@@ -30,6 +32,7 @@ let history: StoredEntry[] = store.loadHistory();
 /** New licks avoid the cells of the last few licks, so a practice session keeps hearing new figures. */
 const RECENT_LICKS = 8;
 let favorites: StoredEntry[] = store.loadFavorites();
+let practice: PracticeLog = store.loadPractice();
 let lick: Lick | null = null;
 /** The lick as generated or loaded, before any refit. Refits always start from it, so folding notes into a
  * narrow range (e.g. bass) is undone when switching back to a wider instrument. */
@@ -152,6 +155,12 @@ function syncControls(): void {
   check('c-slow', settings.slow);
   check('c-count', settings.countIn);
   check('c-met', settings.metronome);
+  check('c-met24', settings.metronome24);
+  $<HTMLInputElement>('c-met24').disabled = !settings.metronome;
+  check('c-drums', settings.drums);
+  $<HTMLInputElement>('c-drums').disabled = !settings.piano;
+  $<HTMLInputElement>('r-drums').disabled = !settings.piano || !settings.drums;
+  $<HTMLInputElement>('r-drums').value = String(settings.drumVolume);
   check('c-midi', settings.midiBacking);
   $<HTMLInputElement>('r-bpm').value = String(settings.bpm);
   $('bpm-val').textContent = String(effectiveBpm());
@@ -460,6 +469,7 @@ function playOptions(): PlayOptions {
     bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, loop: settings.loop || drillOn() || settings.callResponse, metronome: settings.metronome,
     countIn: settings.countIn, piano: settings.piano, comp: settings.comp,
     leadVolume: settings.leadVolume, pianoVolume: settings.pianoVolume, timbre: inst().timbre,
+    drums: settings.drums, drumVolume: settings.drumVolume, metronome24: settings.metronome24,
   };
 }
 
@@ -487,6 +497,7 @@ function startPlayback(keepDrill = false): void {
       if (!(notesCovered() && !settings.hideKeepChords)) renderNotation();
     },
     onStatus: s => { if (/count/i.test(s)) setStatus(s.toLowerCase()); },
+    onPassEnd: (_i, info) => { practice = store.recordPractice(info.lick, info.bpm); },
     onPass: run ? drillOnPass : undefined,
     onPassStart: run ? drillOnPassStart : undefined,
     onEnd: () => { finishDrill(); highlight = []; setStatus(run?.session.drill ? 'Drill complete' : 'Ready'); updateTransport(); renderNotation(); },
@@ -635,7 +646,7 @@ function exportStatus(text: string, clearAfter = 0): void {
 function doMidi(): void {
   if (!lick) return;
   const bytes = lickToMidi(lick, {
-    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, comping: settings.midiBacking, comp: settings.comp,
+    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, comping: settings.midiBacking, comp: settings.comp, drums: settings.drums,
     program: PROGRAMS[inst().timbre],
   });
   downloadBlob(new Blob([bytes as BlobPart], { type: 'audio/midi' }), fileName(lick, 'mid'));
@@ -738,6 +749,29 @@ function setupDialog(id: string, openerId: string): HTMLDialogElement {
   return dlg;
 }
 
+/* ---------------------------------------------------------------- lick of the day */
+
+let dailyGenerated: { key: string; lick: Lick } | null = null;
+
+/** A saved lick picked by the date, or (nothing saved) a lick generated from a seed fixed for the day. */
+function getLickOfDay(): { lick: Lick; saved: boolean } | null {
+  const now = Date.now();
+  const saved = pickForDay([...favorites].sort((a, b) => (a.lick.id < b.lick.id ? -1 : 1)), now);
+  if (saved) return { lick: saved.lick, saved: true };
+  const day = dayNumber(now);
+  const key = `${day}:${settings.instrumentId}`;
+  if (dailyGenerated?.key !== key) {
+    dailyGenerated = {
+      key,
+      lick: generateLick({
+        progressionId: 'major-251', length: 'standard', keyPc: day % 12, tier: 2,
+        range: concertRange(inst()), comfortRange: concertRangeForLevel(inst(), 2), seed: 1_000_003 + day,
+      }),
+    };
+  }
+  return { lick: dailyGenerated.lick, saved: false };
+}
+
 /* ---------------------------------------------------------------- wiring */
 
 function bind(): void {
@@ -751,6 +785,8 @@ function bind(): void {
     onRemoveFavorite: id => { favorites = store.removeFavorite(id); updateFav(); },
     onClearHistory: () => { store.clearHistory(); history = []; },
     isTransposing: () => isTransposing(inst()),
+    getPractice: l => practice[lickContentKey(l)],
+    getLickOfDay,
   });
   const dialogs = [setupDialog('sound', 'btn-sound'), setupDialog('keys', 'btn-keys')];
   setupExportMenu();
@@ -828,10 +864,15 @@ function bind(): void {
     settings.leadVolume = Number($<HTMLInputElement>('r-lead').value);
     settings.pianoVolume = Number($<HTMLInputElement>('r-piano').value);
     persist();
-    player.setVolumes(settings.leadVolume, settings.pianoVolume);
+    settings.drumVolume = Number($<HTMLInputElement>('r-drums').value);
+    persist();
+    player.setVolumes(settings.leadVolume, settings.pianoVolume, settings.drumVolume);
   };
   $('r-lead').addEventListener('input', vol);
   $('r-piano').addEventListener('input', vol);
+  $('r-drums').addEventListener('input', vol);
+  onCheck('c-drums', on => { setting('drums', on); restartIfPlaying(); });
+  onCheck('c-met24', on => { setting('metronome24', on); restartIfPlaying(); });
   $<HTMLSelectElement>('sel-drill').addEventListener('change', e => { setting('drillOrder', (e.target as HTMLSelectElement).value as DrillOrder); restartIfPlaying(); });
   $<HTMLSelectElement>('sel-drill-rep').addEventListener('change', e => { setting('drillRepeats', clampInt(Number((e.target as HTMLSelectElement).value), 1, 4)); });
   const numSetting = (id: string, k: 'drillTempoStep' | 'drillMaxBpm', lo: number, hi: number): void => {

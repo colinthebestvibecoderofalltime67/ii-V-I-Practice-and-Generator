@@ -102,3 +102,84 @@ export function click(ctx: AudioContext, out: AudioNode, t: number, accent: bool
   g.gain.exponentialRampToValueAtTime(.001, t + .04);
   o.start(t); o.stop(t + .05);
 }
+
+/* ---------------------------------------------------------------- drums (oscillators + one cached noise buffer) */
+
+const noiseBuffers = new WeakMap<BaseAudioContext, AudioBuffer>();
+/** One short white-noise buffer per AudioContext (looped by the voices that need more). */
+function noise(ctx: AudioContext): AudioBuffer {
+  let b = noiseBuffers.get(ctx);
+  if (!b) {
+    const len = Math.floor(ctx.sampleRate * 0.5);
+    b = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = b.getChannelData(0);
+    let a = 12345; // fixed seed: the same noise every run
+    for (let i = 0; i < len; i++) { a = (Math.imul(a, 1664525) + 1013904223) | 0; d[i] = a / 2147483648; }
+    noiseBuffers.set(ctx, b);
+  }
+  return b;
+}
+
+function noiseSrc(ctx: AudioContext, t: number): AudioBufferSourceNode {
+  const s = ctx.createBufferSource();
+  s.buffer = noise(ctx);
+  s.loop = true;
+  s.start(t, Math.random() * 0.2);
+  return s;
+}
+
+/** Inharmonic partials: the metallic part of a cymbal. */
+const METAL = [263, 400, 421, 474, 587, 845];
+
+/** One drum hit at time `t`. `vel` 0..1. */
+export function drum(ctx: AudioContext, out: AudioNode, kind: 'ride' | 'hat' | 'kick' | 'snare', t: number, vel: number): void {
+  if (kind === 'kick') {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(95, t);
+    o.frequency.exponentialRampToValueAtTime(48, t + .09);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vel, t + .004);
+    g.gain.exponentialRampToValueAtTime(.001, t + .22);
+    o.connect(g); g.connect(out);
+    o.start(t); o.stop(t + .25);
+    return;
+  }
+  if (kind === 'snare') {
+    const n = noiseSrc(ctx, t), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    f.type = 'bandpass'; f.frequency.value = 2200; f.Q.value = .7;
+    g.gain.setValueAtTime(vel * .6, t);
+    g.gain.exponentialRampToValueAtTime(.001, t + .11);
+    n.connect(f); f.connect(g); g.connect(out);
+    n.stop(t + .13);
+    const o = ctx.createOscillator(), og = ctx.createGain();
+    o.type = 'triangle'; o.frequency.value = 190;
+    og.gain.setValueAtTime(vel * .3, t);
+    og.gain.exponentialRampToValueAtTime(.001, t + .07);
+    o.connect(og); og.connect(out);
+    o.start(t); o.stop(t + .09);
+    return;
+  }
+  const ride = kind === 'ride';
+  const len = ride ? .55 : .07;
+  const n = noiseSrc(ctx, t), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  f.type = 'highpass'; f.frequency.value = ride ? 6500 : 7500; f.Q.value = .5;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vel * (ride ? .2 : .32), t + .003);
+  g.gain.exponentialRampToValueAtTime(.001, t + len);
+  n.connect(f); f.connect(g); g.connect(out);
+  n.stop(t + len + .03);
+  // a touch of metal: the ping of the ride, the tick of the hat
+  const mg = ctx.createGain(), mf = ctx.createBiquadFilter();
+  mf.type = 'bandpass'; mf.frequency.value = ride ? 5200 : 8000; mf.Q.value = 1.2;
+  mg.gain.setValueAtTime(0, t);
+  mg.gain.linearRampToValueAtTime(vel * (ride ? .07 : .06), t + .002);
+  mg.gain.exponentialRampToValueAtTime(.001, t + (ride ? len * .8 : len));
+  mf.connect(mg); mg.connect(out);
+  for (const hz of METAL) {
+    const o = ctx.createOscillator();
+    o.type = 'square'; o.frequency.value = hz * (ride ? 1 : 1.3);
+    o.connect(mf);
+    o.start(t); o.stop(t + len + .03);
+  }
+}

@@ -150,7 +150,7 @@ describe('generator output on the new grid', () => {
     const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, range, seed: 3, fragments: LEGACY_POOL });
     expect(l.difficulty.score).toBe(53.9);
     const sha = (swing: boolean, comping: boolean) =>
-      createHash('sha1').update(lickToMidi(l, { bpm: 120, swing, comping, comp: 'rootless' })).digest('hex');
+      createHash('sha1').update(lickToMidi(l, { bpm: 120, swing, comping, comp: 'rootless', drums: false })).digest('hex');
     expect(sha(false, false)).toBe('686f3e2d79228dce8265f7832833c6d9c91876d8');
     expect(sha(false, true)).toBe('c41290c8d488b1a43e3f4ebcde739eed57866b90');
     expect(sha(true, false)).toBe('e603f5b90893496b35b6f1de9e22e86ec360351e');

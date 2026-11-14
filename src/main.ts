@@ -832,7 +832,8 @@ function updateBar(): void {
 
 function updateRecap(): void {
   const romans = romansFor(settings.progressionId).join('–');
-  const key = settings.key === 'random' ? 'Random key' : keyLabel(settings.key, getProgression(settings.progressionId).mode);
+  // the written key, like the title and key menu (alto in concert C reads A)
+  const key = settings.key === 'random' ? 'Random key' : keyLabel((settings.key + inst().transpose) % 12, getProgression(settings.progressionId).mode);
   $('fold-recap').textContent =
     [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], instShort(inst()), key, lengthShort(settings.length)].join(' · ');
 }

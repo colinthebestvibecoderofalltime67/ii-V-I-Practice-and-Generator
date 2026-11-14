@@ -275,54 +275,76 @@ function chordRuns(att: Att[]): Att[][] {
   return out;
 }
 
-/** Number of distinct pitch classes of a window that are not in a set of chord-relative pitch classes. */
-const outsideOf = (w: Att[], inside: (rel: number) => boolean): number => new Set(w.filter(a => !inside(a.rel)).map(a => a.rel)).size;
+
+/* 12-bit pitch-class sets: the detectors run once per generator candidate, so they work on bit masks rather than Sets. */
+const POP = new Uint8Array(4096);
+for (let i = 1; i < 4096; i++) POP[i] = POP[i >> 1] + (i & 1);
+const maskOf = (pcs: readonly number[]): number => pcs.reduce((m, p) => m | (1 << mod12(p)), 0);
+/** Rotate a pitch-class mask up by `r` semitones. */
+const rotMask = (m: number, r: number): number => (((m << r) | (m >> (12 - r))) & 0xfff);
+const QUALITY_IDS = Object.keys(CHORDS) as ChordQualityId[];
+/** Per quality, relative to the root: chord tones, chord tones + 9th, parent scale. */
+const TONES_MASK = Object.fromEntries(QUALITY_IDS.map(q => [q, maskOf(CHORDS[q].tones)])) as Record<ChordQualityId, number>;
+const TONES9_MASK = Object.fromEntries(QUALITY_IDS.map(q => [q, maskOf([...CHORDS[q].tones, 2])])) as Record<ChordQualityId, number>;
+const SCALE_MASK = Object.fromEntries(QUALITY_IDS.map(q => [q, maskOf(CHORDS[q].scale)])) as Record<ChordQualityId, number>;
+const TRIAD_MASK: number[][] = [false, true].map(minor => Array.from({ length: 12 }, (_, r) => maskOf(triad(r, minor))));
 
 function triadPairs(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]): void {
   for (const seg of chordRuns(att)) {
-    if (seg.length < 6) continue;
-    const q = chords[seg[0].chord].quality;
+    const n = seg.length;
+    if (n < 6) continue;
+    const ch = chords[seg[0].chord];
+    const bit = new Int32Array(n);
+    let used = 0;
+    for (let i = 0; i < n; i++) { bit[i] = 1 << mod12(seg[i].midi); used |= bit[i]; }
+    // pitch classes that do not count as "beyond the chord tones and the 9th"
+    const inside = rotMask(TONES9_MASK[ch.quality], ch.rootPc);
     const cands: { s: number; e: number; score: number }[] = [];
     // major and minor pairs are judged together: the best (longest) window wins where they overlap
-    for (const minor of [false, true]) {
+    for (let mi = 0; mi < 2; mi++) {
       for (let r = 0; r < 12; r++) {
-        const A = triad(r, minor);
-        const B = triad(r + 2, minor);
-        const which = (pc: number): 0 | 1 | -1 => (A.includes(pc) ? 0 : B.includes(pc) ? 1 : -1);
+        const mA = TRIAD_MASK[mi][r];
+        const mB = TRIAD_MASK[mi][(r + 2) % 12];
+        const all = mA | mB;
+        if (POP[used & all] < 6) continue; // fewer than six pitch classes of the pair in the segment at all
         let s = 0;
-        while (s < seg.length) {
-          if (which(mod12(seg[s].midi)) < 0) { s++; continue; }
+        while (s < n) {
+          if (!(bit[s] & all)) { s++; continue; }
           let e = s;
-          while (e + 1 < seg.length && which(mod12(seg[e + 1].midi)) >= 0) e++;
-          const w = seg.slice(s, e + 1);
-          if (w.length >= 6) {
-            const cnt = [0, 0];
-            const pcs: Set<number>[] = [new Set(), new Set()];
+          while (e + 1 < n && bit[e + 1] & all) e++;
+          const len = e - s + 1;
+          if (len >= 6) {
+            let cntA = 0;
+            let cntB = 0;
+            let pA = 0;
+            let pB = 0;
             let switches = 0;
             let leaps = 0;
             let big = 0;
-            w.forEach((a, i) => {
-              const g = which(mod12(a.midi)) as 0 | 1;
-              cnt[g]++;
-              pcs[g].add(mod12(a.midi));
-              if (i > 0) {
-                if (which(mod12(w[i - 1].midi)) !== g) switches++;
-                const iv = Math.abs(a.midi - w[i - 1].midi);
+            let fast = 0;
+            let usedW = 0;
+            for (let i = s; i <= e; i++) {
+              const inA = (bit[i] & mA) !== 0;
+              if (inA) { cntA++; pA |= bit[i]; } else { cntB++; pB |= bit[i]; }
+              usedW |= bit[i];
+              if (seg[i].end - seg[i].start <= TPB / 2) fast++;
+              if (i > s) {
+                if (((bit[i - 1] & mA) !== 0) !== inA) switches++;
+                const iv = Math.abs(seg[i].midi - seg[i - 1].midi);
                 if (iv >= 3) leaps++;
                 if (iv >= 4) big++;
               }
-            });
-            const fast = w.filter(a => a.end - a.start <= TPB / 2).length;
+            }
             // not a scale that happens to sit in six pitch classes: >= 2 pitch classes beyond the chord tones and the 9th
-            const outside = outsideOf(w, rel => isTone(q, rel) || rel === 2);
-            if (cnt[0] >= 3 && cnt[1] >= 3 && pcs[0].size === 3 && pcs[1].size === 3 && switches >= 1 && leaps >= 0.65 * (w.length - 1) && big >= 2 && fast >= 0.75 * w.length && outside >= 2) {
-              cands.push({ s: seg[s].first, e: seg[e].last, score: w.length * 100 + leaps });
+            if (cntA >= 3 && cntB >= 3 && POP[pA] === 3 && POP[pB] === 3 && switches >= 1 && leaps >= 0.65 * (len - 1) && big >= 2 && fast >= 0.75 * len && POP[usedW & ~inside] >= 2) {
+              cands.push({ s: seg[s].first, e: seg[e].last, score: len * 100 + leaps });
             }
           }
           s = e + 1;
         }
       }
     }
+    if (!cands.length) continue;
     cands.sort((a, b) => b.score - a.score);
     const kept: { s: number; e: number }[] = [];
     for (const c of cands) {
@@ -371,56 +393,65 @@ function sixthDims(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]):
   }
 }
 
-const pcsOf = (root: number, tones: number[]): Set<number> => new Set(tones.map(t => mod12(root + t)));
-const M7 = [0, 3, 7, 10];
-const D7 = [0, 4, 7, 10];
+const M7_MASK: number[] = Array.from({ length: 12 }, (_, r) => maskOf([r, r + 3, r + 7, r + 10]));
+const D7_MASK: number[] = Array.from({ length: 12 }, (_, r) => maskOf([r, r + 4, r + 7, r + 10]));
 
 function superimpositions(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]): void {
   const taken = new Set<number>();
   for (const seg of chordRuns(att)) {
-    if (seg.length < 4) continue;
+    const n = seg.length;
+    if (n < 4) continue;
     const ch = chords[seg[0].chord];
-    const mark = (w: Att[]): void => {
-      out.push({ kind: 'superimposition', first: w[0].first, last: w[w.length - 1].last, chord: w[0].chord });
-      for (const a of w) taken.add(a.first);
+    const bit = new Int32Array(n);
+    for (let i = 0; i < n; i++) bit[i] = 1 << mod12(seg[i].midi);
+    const mark = (s: number, e: number): void => {
+      out.push({ kind: 'superimposition', first: seg[s].first, last: seg[e].last, chord: seg[s].chord });
+      for (let i = s; i <= e; i++) taken.add(seg[i].first);
     };
+    const takenIn = (s: number, e: number): boolean => { for (let i = s; i <= e; i++) if (taken.has(seg[i].first)) return true; return false; };
     // genuinely outside: at least 2 pitch classes beyond the chord's parent scale
-    const outsideScale = (w: Att[]): boolean => outsideOf(w, rel => CHORDS[ch.quality].scale.some(t => mod12(t) === rel)) >= 2;
+    const scaleMask = rotMask(SCALE_MASK[ch.quality], ch.rootPc);
+    const outsideScale = (s: number, e: number): boolean => {
+      let m = 0;
+      for (let i = s; i <= e; i++) m |= bit[i];
+      return POP[m & ~scaleMask] >= 2;
+    };
     // (a) a ii-V a fourth apart: the m7 first, then the 7. Not the chord's own ii-V (Gm7-C7 over C7, Dm7-G7 over Cmaj7) nor the
     // m7 a fifth above the root (an upper structure: Gm7 over C7, Am7 over Dm7).
     for (let r = 0; r < 12; r++) {
       if (r === ch.rootPc || r === mod12(ch.rootPc + 7) || (ch.quality === 'maj7' && r === mod12(ch.rootPc + 2))) continue;
-      const ii = pcsOf(r, M7);
-      const v = pcsOf(r + 5, D7);
-      const pc = (i: number): number => mod12(seg[i].midi);
-      for (let k = 2; k + 2 <= seg.length; k++) {
+      const iiM = M7_MASK[r];
+      const vM = D7_MASK[(r + 5) % 12];
+      for (let k = 2; k + 2 <= n; k++) {
+        if (!(iiM & bit[k - 1]) || !(vM & bit[k])) continue;
         let s = k;
-        while (s > 0 && ii.has(pc(s - 1))) s--;
+        while (s > 0 && iiM & bit[s - 1]) s--;
         let e = k - 1;
-        while (e + 1 < seg.length && v.has(pc(e + 1))) e++;
-        if (k - s < 2 || e - k + 1 < 2 || seg.slice(s, e + 1).some(a => taken.has(a.first))) continue;
-        const L = new Set(seg.slice(s, k).map(a => mod12(a.midi)));
-        const R = new Set(seg.slice(k, e + 1).map(a => mod12(a.midi)));
-        const iiOnly = [...L].filter(p => !v.has(p)).length;
-        const vOnly = [...R].filter(p => !ii.has(p)).length;
-        const w = seg.slice(s, e + 1);
-        const leaps = w.slice(1).filter((a, i) => Math.abs(a.midi - w[i].midi) >= 3).length;
-        if (L.size >= 3 && R.size >= 3 && iiOnly >= 2 && vOnly >= 2 && leaps >= (w.length - 1) / 2 && outsideScale(w)) { mark(w); break; }
+        while (e + 1 < n && vM & bit[e + 1]) e++;
+        if (k - s < 2 || e - k + 1 < 2 || takenIn(s, e)) continue;
+        let L = 0;
+        let R = 0;
+        for (let i = s; i < k; i++) L |= bit[i];
+        for (let i = k; i <= e; i++) R |= bit[i];
+        if (POP[L] < 3 || POP[R] < 3 || POP[L & ~vM] < 2 || POP[R & ~iiM] < 2) continue;
+        let leaps = 0;
+        for (let i = s + 1; i <= e; i++) if (Math.abs(seg[i].midi - seg[i - 1].midi) >= 3) leaps++;
+        if (leaps >= (e - s) / 2 && outsideScale(s, e)) { mark(s, e); break; }
       }
     }
     // (b) the dominant a tritone away, over a dominant chord
     if (ch.quality === 'dom7' || ch.quality === 'dom7alt') {
-      const sub = pcsOf(ch.rootPc + 6, D7);
+      const sub = D7_MASK[mod12(ch.rootPc + 6)];
+      const tones = rotMask(TONES_MASK[ch.quality], ch.rootPc);
       let s = 0;
-      while (s < seg.length) {
-        if (!sub.has(mod12(seg[s].midi))) { s++; continue; }
+      while (s < n) {
+        if (!(sub & bit[s])) { s++; continue; }
         let e = s;
-        while (e + 1 < seg.length && sub.has(mod12(seg[e + 1].midi))) e++;
-        const w = seg.slice(s, e + 1);
-        if (w.length >= 4 && !w.some(a => taken.has(a.first))) {
-          const used = new Set(w.map(a => mod12(a.midi)));
-          const outside = [...used].filter(p => !isTone(ch.quality, mod12(p - ch.rootPc))).length;
-          if (used.size >= 3 && outside >= 2 && outsideScale(w)) mark(w);
+        while (e + 1 < n && sub & bit[e + 1]) e++;
+        if (e - s + 1 >= 4 && !takenIn(s, e)) {
+          let used = 0;
+          for (let i = s; i <= e; i++) used |= bit[i];
+          if (POP[used] >= 3 && POP[used & ~tones] >= 2 && outsideScale(s, e)) mark(s, e);
         }
         s = e + 1;
       }

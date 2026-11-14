@@ -13,6 +13,8 @@ export interface Ev {
   midi: number | null;
   start: number;
   pieces: number[];
+  /** Part of a Focus cell: the repair and phrasing passes leave its pitches and length alone (set only under a Focus). */
+  lock?: boolean;
 }
 
 export const evDur = (e: Ev): number => e.pieces.reduce((a, b) => a + b, 0);
@@ -123,7 +125,7 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     const prevPitch = prev >= 0 ? (events[prev].midi as number) : null;
     let target = events[i].midi as number;
 
-    if (!isChordToneOrTension(target, c.rootPc, c.quality)) {
+    if (!events[i].lock && !isChordToneOrTension(target, c.rootPc, c.quality)) {
       const np = nearestMatching(
         target,
         p => isChordToneOrTension(p, c.rootPc, c.quality),
@@ -144,7 +146,7 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     const j = prev;
     const j2 = soundingBefore(j);
     const before = j2 >= 0 ? (events[j2].midi as number) : null;
-    const flexible = (k: number) => k >= 0 && evDur(events[k]) <= 4 * TICKS_PER_16TH && !isTupletDur(evDur(events[k])) && !startTicks.has(events[k].start) && events[k].midi != null;
+    const flexible = (k: number) => k >= 0 && !events[k].lock && evDur(events[k]) <= 4 * TICKS_PER_16TH && !isTupletDur(evDur(events[k])) && !startTicks.has(events[k].start) && events[k].midi != null;
     const cost = (a: number | null, b: number, t: number) =>
       (a == null ? 0 : leapPenalty(b - a)) + leapPenalty(t - b);
     const orig = (before == null ? 0 : leapPenalty(prevPitch - before)) + leapPenalty(target - prevPitch);
@@ -190,7 +192,7 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     const pj = soundingBefore(last);
     const prevPitch = pj >= 0 ? (events[pj].midi as number) : null;
     // the closing note is a chord tone / 9th / 6th and never re-attacks the pitch before it
-    if (!isEndingTone(e.midi as number, c.rootPc, c.quality) || e.midi === prevPitch) {
+    if (!e.lock && (!isEndingTone(e.midi as number, c.rootPc, c.quality) || e.midi === prevPitch)) {
       const np = nearestMatching(
         e.midi as number, p => isEndingTone(p, c.rootPc, c.quality) && p !== prevPitch, range,
         p => (prevPitch == null ? 0 : leapPenalty(p - prevPitch)), 6,
@@ -227,6 +229,7 @@ export function fixLeaps(events: Ev[], range: [number, number]): number {
       let best: { k: number; d: number } | null = null;
       let bestC = local(k - 1) + local(k);
       for (const kk of [k - 1, k]) {
+        if (events[idx[kk]].lock) continue;
         for (const d of [-24, -12, 12, 24]) {
           const orig = p(kk);
           const np = orig + d;
@@ -280,13 +283,14 @@ export function fixSeams(events: Ev[], fragStarts: number[], chords: LickChord[]
     const cur = events[k];
     const prev = events[k - 1];
     if (cur.midi == null || prev.midi == null || cur.midi !== prev.midi || hasTuplet(cur) || hasTuplet(prev)) continue;
+    if (cur.lock && prev.lock) continue; // two Focus cells meet on one pitch: neither is touched
     const before = soundingIdxBefore(events, k - 1);
     const beforeMidi = before >= 0 ? (events[before].midi as number) : null;
     const ch = chords[chordIndexAt(chords, prev.start)];
     const onStart = startTicks.has(prev.start);
     let best: number | null = null;
     let bestC = Infinity;
-    for (const d of onStart ? [] : [-2, -1, 1, 2]) {
+    for (const d of onStart || prev.lock ? [] : [-2, -1, 1, 2]) {
       const p = (prev.midi as number) + d;
       if (p < range[0] || p > range[1] || p === cur.midi || p === beforeMidi) continue;
       if (!inScale(p, ch.rootPc, ch.quality)) continue;
@@ -296,7 +300,7 @@ export function fixSeams(events: Ev[], fragStarts: number[], chords: LickChord[]
     if (best != null) {
       prev.midi = best;
       changed++;
-    } else {
+    } else if (!cur.lock && !prev.lock) {
       // tie the repeat into the previous note (pieces keep the cell boundary, so a chord start stays a note start)
       prev.pieces.push(...cur.pieces);
       removeEvent(events, fragStarts, k);
@@ -374,7 +378,7 @@ export function phraseEvents(
     if (i < 1) continue;
     const e = events[i];
     const prev = events[i - 1];
-    if (e.midi == null || hasTuplet(e) || hasTuplet(prev)) continue;
+    if (e.midi == null || hasTuplet(e) || hasTuplet(prev) || e.lock || prev.lock) continue; // a Focus cell keeps its notes
     const rel = mod12(e.midi - c.rootPc);
     if (!CHORDS[c.quality].tones.some(t => mod12(t) === rel) && !CHORDS[c.quality].guide.some(g => mod12(g) === rel)) continue;
     const last = prev.pieces[prev.pieces.length - 1];
@@ -412,7 +416,7 @@ export function phraseEvents(
         acc += evDur(events[n]);
         n++;
       }
-      if (acc === d && n < events.length && events.slice(n).some(x => x.midi != null)) {
+      if (acc === d && n < events.length && events.slice(n).some(x => x.midi != null) && !events.slice(0, n).some(x => x.lock)) {
         events.splice(0, n, { midi: null, start: 0, pieces: [d] });
         for (let k = 0; k < fragStarts.length; k++) if (fragStarts[k] >= n) fragStarts[k] -= n - 1; else if (k > 0 && fragStarts[k] > 0) fragStarts[k] = 1;
       }

@@ -9,7 +9,8 @@ import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from 
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
 import { renderLick, type NoteLabel } from './render/notation';
 import { lickFingerings } from './render/tab';
-import { Player, type PlayOptions } from './audio/player';
+import { Player, type PassAction, type PlayOptions } from './audio/player';
+import { clampInt, drillKeys, drillStep, type DrillConfig, type DrillOrder } from './practice/drill';
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
 import { Library } from './ui/library';
@@ -149,6 +150,11 @@ function syncControls(): void {
   $('bpm-val').textContent = String(effectiveBpm());
   $('bpm-val').title = settings.slow ? `Slow practice: 60% of ${settings.bpm} (minimum 40)` : '';
   $<HTMLSelectElement>('sel-comp').value = settings.comp;
+  $<HTMLSelectElement>('sel-drill').value = settings.drillOrder;
+  $<HTMLSelectElement>('sel-drill-rep').value = String(settings.drillRepeats);
+  $<HTMLInputElement>('n-drill-step').value = String(settings.drillTempoStep);
+  $<HTMLInputElement>('n-drill-max').value = String(settings.drillMaxBpm);
+  for (const id of ['sel-drill-rep', 'n-drill-step', 'n-drill-max']) $<HTMLInputElement>(id).disabled = !drillOn();
   $<HTMLInputElement>('r-lead').value = String(settings.leadVolume);
   $<HTMLInputElement>('r-piano').value = String(settings.pianoVolume);
 
@@ -358,6 +364,7 @@ function updateFav(): void {
 
 function stopPlayback(): void {
   if (player.state !== 'stopped') player.stop();
+  finishDrill();
   highlight = [];
   setStatus('Ready');
   updateTransport();
@@ -419,7 +426,7 @@ const PROGRAMS: Record<Instrument['timbre'], number> = { reed: 66, brass: 56, fl
 
 function playOptions(): PlayOptions {
   return {
-    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, loop: settings.loop, metronome: settings.metronome,
+    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, loop: settings.loop || drillOn(), metronome: settings.metronome,
     countIn: settings.countIn, piano: settings.piano, comp: settings.comp,
     leadVolume: settings.leadVolume, pianoVolume: settings.pianoVolume, timbre: inst().timbre,
   };
@@ -427,20 +434,88 @@ function playOptions(): PlayOptions {
 
 function startPlayback(): void {
   if (!lick) return;
+  finishDrill(); // a restart mid-drill keeps the key on screen and drills from there
   highlight = [];
   const bars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
+  const run = startDrill();
   player.play(lick, playOptions(), {
     onNote: (idx, cur) => {
       highlight = idx;
       currentNote = cur ?? -1;
       const b = activeBar();
-      if (b !== undefined) setStatus(`bar ${b + 1} / ${bars}`);
+      if (b !== undefined && !drill) setStatus(`bar ${b + 1} / ${bars}`);
       if (!settings.hide) renderNotation();
     },
     onStatus: s => { if (/count/i.test(s)) setStatus(s.toLowerCase()); },
-    onEnd: () => { highlight = []; setStatus('Ready'); updateTransport(); renderNotation(); },
+    onPass: run ? drillOnPass : undefined,
+    onPassStart: run ? drillOnPassStart : undefined,
+    onEnd: () => { finishDrill(); highlight = []; setStatus(run ? 'Drill complete' : 'Ready'); updateTransport(); renderNotation(); },
   });
   updateTransport();
+}
+
+/* ---------------------------------------------------------------- 12-key drill */
+
+interface DrillRun {
+  cfg: DrillConfig;
+  keys: number[];
+  startBpm: number;
+  /** The lick every key is transposed from (never from an already-transposed copy). */
+  base: Lick;
+  /** History id of the lick on screen when the drill began; replaced by the lick shown at the end. */
+  originalId: string;
+}
+let drill: DrillRun | null = null;
+
+const drillOn = (): boolean => settings.drillOrder !== 'off';
+
+/** Turn the settings into a run, or null when the drill is off. Loop is switched on for the user. */
+function startDrill(): DrillRun | null {
+  if (!lick || !drillOn()) return null;
+  if (!settings.loop) { settings.loop = true; persist(); syncControls(); }
+  const base = sourceLick && sourceLick.id === lick.id ? sourceLick : lick;
+  drill = {
+    cfg: { order: settings.drillOrder, repeats: settings.drillRepeats, tempoStep: settings.drillTempoStep, maxBpm: settings.drillMaxBpm, tempoEvery: 'key' },
+    keys: drillKeys(lick.keyPc, settings.drillOrder, randomSeed()),
+    startBpm: effectiveBpm(),
+    base,
+    originalId: lick.id,
+  };
+  return drill;
+}
+
+/** Called by the player ahead of each bar line: decide what the next pass plays. */
+function drillOnPass(passIndex: number): PassAction | void {
+  const d = drill;
+  if (!d) return;
+  const st = drillStep(d.cfg, d.keys, d.startBpm, passIndex);
+  if (st.done) return { stop: true };
+  if (!st.keyChanged) return { bpm: st.bpm };
+  const l = transposeLick(d.base, st.key, concertRange(inst()), comfortFor(d.base));
+  return { lick: l, bpm: st.bpm };
+}
+
+/** Called by the player at the bar line itself: show what is now playing. */
+function drillOnPassStart(passIndex: number, info: { lick: Lick; bpm: number }): void {
+  const d = drill;
+  if (!d) return;
+  const st = drillStep(d.cfg, d.keys, d.startBpm, passIndex);
+  if (info.lick !== lick) {
+    settings.key = info.lick.keyPc;
+    persist();
+    showLick(info.lick, false, undefined, true); // nothing goes to History until the drill stops
+  }
+  const pass = d.cfg.repeats > 1 ? ` · pass ${st.repeat + 1}/${clampInt(d.cfg.repeats, 1, 4)}` : '';
+  setStatus(`Key ${st.keyIndex + 1}/${st.keyCount} · ${titleKeyLabel(info.lick, inst())} · ${info.bpm} BPM${pass}`);
+}
+
+/** End the drill: the lick on screen (the last key reached) replaces the starting lick in History. */
+function finishDrill(): void {
+  const d = drill;
+  drill = null;
+  if (!d || !lick || lick.id === d.originalId) return;
+  history = store.removeHistory(d.originalId);
+  history = store.addHistory(lick);
 }
 
 function togglePlay(): void {
@@ -658,6 +733,14 @@ function bind(): void {
   };
   $('r-lead').addEventListener('input', vol);
   $('r-piano').addEventListener('input', vol);
+  $<HTMLSelectElement>('sel-drill').addEventListener('change', e => { setting('drillOrder', (e.target as HTMLSelectElement).value as DrillOrder); });
+  $<HTMLSelectElement>('sel-drill-rep').addEventListener('change', e => { setting('drillRepeats', clampInt(Number((e.target as HTMLSelectElement).value), 1, 4)); });
+  const numSetting = (id: string, k: 'drillTempoStep' | 'drillMaxBpm', lo: number, hi: number): void => {
+    const el = $<HTMLInputElement>(id);
+    el.addEventListener('change', () => { setting(k, el.value === '' ? lo : clampInt(Number(el.value), lo, hi)); });
+  };
+  numSetting('n-drill-step', 'drillTempoStep', 0, 20);
+  numSetting('n-drill-max', 'drillMaxBpm', 40, 320);
   onCheck('c-count', on => setting('countIn', on));
   onCheck('c-met', on => { setting('metronome', on); restartIfPlaying(); });
   onCheck('c-midi', on => setting('midiBacking', on));

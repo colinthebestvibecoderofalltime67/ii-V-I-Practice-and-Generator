@@ -203,6 +203,32 @@
       <label class="check"><input type="checkbox" id="c-met"> Metronome</label>
       <label class="check"><input type="checkbox" id="c-midi"> Include backing in MIDI export</label>
     </div>
+    <!-- 12-key drill (C1) -->
+    <fieldset class="field drill" id="drill">
+      <legend class="label">12-key drill</legend>
+      <label class="drill-row"><span>Order</span>
+        <select id="sel-drill">
+          <option value="off">Off</option>
+          <option value="fourths">Cycle of 4ths</option>
+          <option value="fifths">Cycle of 5ths</option>
+          <option value="chromatic-up">Chromatic up</option>
+          <option value="chromatic-down">Chromatic down</option>
+          <option value="whole-steps">Whole steps</option>
+          <option value="random">Random</option>
+        </select>
+      </label>
+      <label class="drill-row"><span>Change key every</span>
+        <select id="sel-drill-rep" aria-label="Passes per key"><option>1</option><option>2</option><option>3</option><option>4</option></select>
+        <span>passes</span>
+      </label>
+      <div class="drill-row"><label for="n-drill-step">Tempo ladder: +</label>
+        <input type="number" id="n-drill-step" min="0" max="20" step="1" inputmode="numeric">
+        <label for="n-drill-max">BPM each key, up to</label>
+        <input type="number" id="n-drill-max" min="40" max="320" step="5" inputmode="numeric">
+        <span>BPM</span>
+      </div>
+      <p class="small muted" id="drill-hint">Plays the current lick once through all 12 keys, then stops on the last key. Turns Loop on.</p>
+    </fieldset>
   </div>
 </dialog>
 

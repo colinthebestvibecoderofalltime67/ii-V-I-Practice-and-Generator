@@ -272,6 +272,17 @@ dialog::backdrop { background: rgba(20, 20, 18, .35); }
 .keys dd { margin: 0; }
 .keys kbd { opacity: 1; padding: 2px 6px; border: 1px solid var(--field); border-radius: 4px; }
 
+/* 12-key drill (C1) */
+.drill { display: flex; flex-direction: column; gap: 10px; }
+.drill-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.drill-row select { flex: 1; min-width: 0; }
+#sel-drill-rep { flex: none; width: 4.6em; }
+.drill-row input[type="number"] {
+  width: 4.6em; min-height: 40px; padding: 0 8px; border: 1px solid var(--field); border-radius: var(--radius);
+  background: var(--field-bg); font-variant-numeric: tabular-nums;
+}
+.drill-row label { cursor: default; }
+
 /* library */
 .tabs { display: flex; gap: 20px; padding: 0 20px; border-bottom: 1px solid var(--rule); }
 .tabs button { min-height: 44px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); cursor: pointer; padding: 0; }

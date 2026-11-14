@@ -106,11 +106,12 @@ describe('share codes', () => {
     const b = atob(code.replace(/-/g, '+').replace(/_/g, '/'));
     const flip = (i: number, v: number) =>
       btoa(Array.from(b, (ch, k) => String.fromCharCode(k === i ? v : ch.charCodeAt(0))).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    expect(decodeLick(flip(0, 0x30 | (b.charCodeAt(0) & 15)))).toBeNull(); // unknown version
+    expect(decodeLick(flip(0, 0x40 | (b.charCodeAt(0) & 15)))).toBeNull(); // unknown version
     expect(decodeLick(flip(1, 0xf0 | (b.charCodeAt(1) & 15)))).toBeNull(); // unknown progression
     expect(decodeLick(flip(1, (b.charCodeAt(1) & 0xf0) | 13))).toBeNull(); // key > 11
     expect(decodeLick(flip(2, 255))).toBeNull(); // score > 100
-    expect(decodeLick(flip(3, 0xff))).toBeNull(); // bad note header
+    expect(decodeLick(flip(3, 0xff))).toBeNull(); // unknown Focus concept
+    expect(decodeLick(flip(4, 0xff))).toBeNull(); // bad note header
     let seed = 1;
     const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
     for (let k = 0; k < 2000; k++) {
@@ -131,11 +132,30 @@ describe('share codes', () => {
     // a v1 link (version nibble 1, no dur 16) written by the old encoder must keep decoding to the same lick
     const l1 = generateLick({ progressionId: 'major-251', length: 'short', keyPc: 2, tier: 2, range, seed: 3 });
     const bytes = Array.from(atob(encodeLick(l1).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-    bytes[0] = (bytes[0] & 0x0f) | 0x10;
-    const v1 = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    const d = decodeLick(v1);
-    expect(d).not.toBeNull();
-    expect(d!.notes).toEqual(l1.notes);
+    bytes.splice(3, 1); // v1 and v2 have no Focus byte
+    const asVersion = (v: number): string => {
+      const o = [...bytes];
+      o[0] = (o[0] & 0x0f) | (v << 4);
+      return btoa(String.fromCharCode(...o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    };
+    for (const v of [1, 2]) {
+      const d = decodeLick(asVersion(v));
+      expect(d, `v${v}`).not.toBeNull();
+      expect(d!.notes).toEqual(l1.notes);
+      expect(d!.focus).toBeUndefined();
+    }
+  });
+
+  it('carries the Focus concept (version 3) and rejects an unknown one', () => {
+    for (const focus of ['guideTones', 'enclosures', 'chromaticApproach', 'anticipateI', 'triadPairs', 'sixthDim', 'superimposition'] as const) {
+      const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 5, tier: 3, range, seed: 11, concept: focus });
+      expect(l.focus).toBe(focus);
+      const d = decodeLick(encodeLick(l));
+      expect(d!.focus).toBe(focus);
+      expect(d!.notes).toEqual(l.notes);
+    }
+    const plain = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 5, tier: 3, range, seed: 11 });
+    expect(decodeLick(encodeLick(plain))!.focus).toBeUndefined();
   });
 
   it('sweep: every generated lick (instruments x progressions x lengths x targets x seeds) encodes and round-trips', () => {

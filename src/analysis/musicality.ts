@@ -3,12 +3,13 @@
  * and vocabulary changes are judged by numbers rather than taste. Each metric answers one question a jazz
  * player would ask of a line; see docs/ARCHITECTURE.md.
  */
-import type { Lick, LickNote } from '../types';
+import type { ConceptId, Lick, LickNote } from '../types';
 import { TPB } from '../types';
 import { CHORDS, inScale } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 import { getProgression } from '../theory/progressions';
 import { anticipationFitsOldChord } from '../generator/connect';
+import { conceptHits } from '../theory/devices';
 
 /** Degree label of the closing note, for the ending-tone distribution. */
 export type EndingDegree = 'R' | '3' | '5' | '7' | '9' | '6' | 'other';
@@ -336,4 +337,26 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     m7b5Flat5Share: flatN ? flat / flatN : 0,
     nearDuplicateShare: pairs ? dupPairs / pairs : 0,
   };
+}
+
+/**
+ * Concept hit rate: of the licks generated with a Focus, how much of the concept do the notes deliver (detectDevices)?
+ * Per lick, `hits / of` comes from conceptHits: guide tones count the chord changes with a guide-tone link, the other
+ * concepts count 1 when the device occurs at all. The rate is hits over opportunities across the licks.
+ */
+export function conceptHitRate(licks: readonly Lick[], concept: ConceptId): { licks: number; hits: number; of: number; rate: number } {
+  let hits = 0;
+  let of = 0;
+  for (const l of licks) {
+    const h = conceptHits(l, concept);
+    hits += h.hits;
+    of += h.of;
+  }
+  return { licks: licks.length, hits, of, rate: of ? hits / of : 0 };
+}
+
+/** Mean absolute distance between the slider target a lick was generated for and the score it came out with (licks with a target only). */
+export function sliderError(licks: readonly Lick[]): number {
+  const t = licks.filter(l => l.targetScore !== undefined);
+  return t.length ? t.reduce((a, l) => a + Math.abs(l.difficulty.score - (l.targetScore as number)), 0) / t.length : 0;
 }

@@ -1,5 +1,5 @@
 import './styles.css';
-import type { Instrument, Lick, Tier } from './types';
+import type { ConceptId, Instrument, Lick, Tier } from './types';
 import { TIER_NAMES, TPBAR } from './types';
 import { barOf } from './theory/rhythm';
 import { LENGTHS, PROGRESSIONS, getProgression, lengthBars } from './theory/progressions';
@@ -8,6 +8,8 @@ import { generateLick, randomSeed, transposeLick } from './generator';
 import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from './difficulty/score';
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
 import { renderLick, type NoteLabel } from './render/notation';
+import { CONCEPTS, CONCEPT_DESC, CONCEPT_NAME, CONCEPT_SHORT, isConceptId } from './theory/devices';
+import { deviceRows, focusHint, type DeviceRow } from './ui/devices';
 import { lickFingerings } from './render/tab';
 import { Player, type PassAction, type PlayOptions } from './audio/player';
 import { sessionStep, type SessionConfig } from './practice/session';
@@ -102,6 +104,7 @@ function buildStaticControls(): void {
   $('len-list').replaceChildren(...(Object.keys(LENGTHS) as (keyof typeof LENGTHS)[]).map(id =>
     radio('len', id, '<span></span>')));
   $<HTMLSelectElement>('sel-inst').innerHTML = INSTRUMENTS.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
+  $<HTMLSelectElement>('sel-focus').innerHTML = [`<option value="any">Any</option>`, ...CONCEPTS.map(c => `<option value="${c}">${CONCEPT_NAME[c]}</option>`)].join('');
 }
 
 function fillKeyOptions(): void {
@@ -144,6 +147,11 @@ function syncControls(): void {
     hint.hidden = false;
     hint.textContent = `${prog.name} is usually ${TIER_NAMES[prog.minTier]} material, so ${TIER_NAMES[targetTier()]} licks here will be very simple.`;
   } else hint.hidden = true;
+  $<HTMLSelectElement>('sel-focus').value = settings.focus;
+  $('focus-desc').textContent = settings.focus === 'any' ? 'No particular device: a mix of the usual vocabulary.' : CONCEPT_DESC[settings.focus];
+  const fh = settings.focus === 'any' ? '' : focusHint(settings.focus, targetTier());
+  $('focus-hint').hidden = !fh;
+  $('focus-hint').textContent = fh;
 
   check('c-swing', settings.swing);
   check('c-straight16', settings.straight16);
@@ -210,7 +218,7 @@ function syncTarget(): void {
 
 /* ---------------------------------------------------------------- analysis */
 
-let analysisFor: { lick: Lick; inst: Instrument; result: LickAnalysis } | null = null;
+let analysisFor: { lick: Lick; inst: Instrument; result: LickAnalysis; devices?: DeviceRow[] } | null = null;
 
 function currentAnalysis(): LickAnalysis | null {
   if (!lick) return null;
@@ -219,11 +227,32 @@ function currentAnalysis(): LickAnalysis | null {
   return analysisFor.result;
 }
 
+/** Devices found in the notes (enclosures, anticipations, triad pairs...), shown with Analyze whatever the Focus is. */
+function currentDevices(): DeviceRow[] {
+  const a = currentAnalysis();
+  if (!a || !lick || !analysisFor) return [];
+  return (analysisFor.devices ??= deviceRows(lick, inst(), a));
+}
+
 function renderAnalysis(): void {
   const panel = $('analysis');
   const a = settings.analyze ? currentAnalysis() : null;
   panel.hidden = !a;
   if (!a) return;
+  const devs = currentDevices();
+  const list = $('an-devs');
+  list.hidden = !devs.length;
+  list.replaceChildren(...devs.map(d => {
+    const li = document.createElement('li');
+    const k = document.createElement('span');
+    k.className = 'dv-k';
+    k.textContent = d.name;
+    const w = document.createElement('span');
+    w.className = 'dv-w';
+    w.textContent = d.where;
+    li.append(k, ` ${d.what}`, w);
+    return li;
+  }));
   $('an-rows').replaceChildren(...a.chords.map(c => {
     const row = document.createElement('div');
     row.className = 'an-row';
@@ -302,6 +331,7 @@ function renderNotation(): void {
     romans: romansFor(lick.progressionId),
     activeBar: activeBar(),
     noteLabels: noteLabels(),
+    ...(settings.analyze ? { devices: currentDevices().map(d => d.mark) } : {}),
     hideNotes: notesCovered() && settings.hideKeepChords,
   });
 }
@@ -355,6 +385,8 @@ function renderMeta(): void {
     s.textContent = `you asked for ${TIER_NAMES[lick.requestedTier]}; this came out ${TIER_NAMES[d.tier]}`;
     meta.append(s);
   }
+
+  if (lick.focus) meta.append(` · Focus: ${CONCEPT_SHORT[lick.focus]}`);
 
   updateBar();
   $('tier-name').textContent = TIER_NAMES[d.tier];
@@ -452,6 +484,7 @@ function generate(): void {
     comfortRange: concertRangeForLevel(inst(), targetTier()),
     avoid: history.slice(0, RECENT_LICKS).flatMap(e => e.lick.fragmentIds),
     seed: randomSeed(),
+    ...(settings.focus !== 'any' ? { concept: settings.focus } : {}),
   });
   showLick(l, true);
 }
@@ -675,6 +708,7 @@ async function doPdf(): Promise<void> {
     const { exportPdf } = await import('./export/pdf');
     await exportPdf(lick, inst(), {
       showTab: settings.showTab && !!inst().tab, tabPosition: tabIndex(), showFingers: settings.showFingers, noteLabels: noteLabels(),
+      ...(settings.analyze ? { devices: currentDevices().map(d => d.mark) } : {}),
     });
     exportStatus('PDF downloaded.', 3000);
   } catch (err) {
@@ -833,6 +867,10 @@ function bind(): void {
   onRadio('prog', v => { settings.progressionId = v; persist(); fillKeyOptions(); syncControls(); });
   const target = $<HTMLInputElement>('r-target');
   target.addEventListener('input', () => { settings.target = Math.round(Number(target.value)); persist(); syncControls(); });
+  $<HTMLSelectElement>('sel-focus').addEventListener('change', e => {
+    const v = (e.target as HTMLSelectElement).value;
+    setting('focus', isConceptId(v) ? (v as ConceptId) : 'any');
+  });
   $('t-analyze').addEventListener('click', () => setAnalyze(!settings.analyze));
   onRadio('len', v => setting('length', v as Settings['length']));
   $<HTMLSelectElement>('sel-inst').addEventListener('change', e => {
@@ -971,7 +1009,7 @@ function updateRecap(): void {
   // the written key, like the title and key menu (alto in concert C reads A)
   const key = settings.key === 'random' ? 'Random key' : keyLabel((settings.key + inst().transpose) % 12, getProgression(settings.progressionId).mode);
   $('fold-recap').textContent =
-    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], instShort(inst()), key, lengthShort(settings.progressionId, settings.length)].join(' · ');
+    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], ...(settings.focus !== 'any' ? [`Focus: ${CONCEPT_SHORT[settings.focus]}`] : []), instShort(inst()), key, lengthShort(settings.progressionId, settings.length)].join(' · ');
 }
 
 function setupPhoneBar(): void {

@@ -4,9 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly exhaustive run (the PR job below uses the thinned, stratified sweeps to stay fast).
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
 
 jobs:
   test-and-build:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,4 +21,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run build
+
+  # SWEEP=full restores the exhaustive sweep sizes in tests/share, spell and transpose (see tests/_samples.ts).
+  full-sweep:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: SWEEP=full npm test
       - run: npm run build

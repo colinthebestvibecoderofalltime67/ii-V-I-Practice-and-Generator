@@ -1,13 +1,20 @@
 import type { Lick, Timbre } from '../types';
 import { TICKS_PER_16TH, TPB } from '../types';
 import { bassEvents, compEvents, type CompStyle } from './comping';
-import { bass, click, lead, piano } from './synth';
+import { bass, click, drum, lead, piano } from './synth';
+import { drumEvents } from './drums';
 import { findTupletGroups } from '../theory/rhythm';
-import { makeTimeline, soundingNotes, timelineSpan } from './timing';
+import { makeTimeline, soundingNotes, tickToBeats, timelineSpan } from './timing';
 
 export interface PlayOptions {
   bpm: number; swing: boolean; straight16: boolean; loop: boolean; metronome: boolean; countIn: boolean;
   piano: boolean; comp: CompStyle; leadVolume: number; pianoVolume: number; timbre: Timbre;
+  /** Swing drums with the backing (needs `piano`, the Backing switch, on). Default off. */
+  drums?: boolean;
+  /** Drum bus volume 0..1 (default 0.5). */
+  drumVolume?: number;
+  /** Metronome clicks only on beats 2 and 4 (beat 1 silent); the count-in is unchanged. */
+  metronome24?: boolean;
 }
 /** onNote: `indices` = every note of the sounding tie chain (to highlight); `current` = the note that just started. */
 /**
@@ -38,6 +45,8 @@ export interface PlayCallbacks {
   onPass?(passIndex: number): PassAction | void;
   /** Fires at the start of every pass (index 0 included, after any count-in). */
   onPassStart?(passIndex: number, info: PassInfo): void;
+  /** Fires when a pass has played to its end (not when playback is stopped mid-pass). */
+  onPassEnd?(passIndex: number, info: PassInfo): void;
 }
 
 /** Pure: fold a PassAction into the sticky lick/bpm state. */
@@ -55,7 +64,7 @@ export function applyPassAction(cur: { lick: Lick; bpm: number }, action: PassAc
  */
 export const PASS_LOOKAHEAD = 1.5;
 
-interface Buses { lead: GainNode; piano: GainNode; met: GainNode }
+interface Buses { lead: GainNode; piano: GainNode; met: GainNode; drums: GainNode }
 interface Queued { t: number; fn: () => void }
 
 export class Player {
@@ -95,10 +104,11 @@ export class Player {
     this._state = 'playing';
     this.timer = setInterval(this.pump, 20);
 
-    const buses: Buses = { lead: ctx.createGain(), piano: ctx.createGain(), met: ctx.createGain() };
+    const buses: Buses = { lead: ctx.createGain(), piano: ctx.createGain(), met: ctx.createGain(), drums: ctx.createGain() };
     buses.lead.gain.value = opts.leadVolume;
     buses.piano.gain.value = opts.pianoVolume;
     buses.met.gain.value = 1;
+    buses.drums.gain.value = opts.drumVolume ?? 0.5;
     (Object.values(buses) as GainNode[]).forEach(b => b.connect(ctx.destination));
     this.buses = buses;
 
@@ -128,6 +138,7 @@ export class Player {
       const end = st + beats * spb;
       this.later(st, () => cb.onPassStart?.(passIndex, { lick: cur, bpm: curBpm, silentLead: silent }));
       this.later(st, () => cb.onStatus?.(`${curBpm} BPM`));
+      this.later(end, () => cb.onPassEnd?.(passIndex, { lick: cur, bpm: curBpm, silentLead: silent }));
       if (silent) this.later(st, () => cb.onNote?.([]));
       else cur.notes.forEach((n, i) => {
         const idx = n.midi == null ? [] : byFirst.get(i) ?? [i];
@@ -145,7 +156,17 @@ export class Player {
         const dur = timelineSpan(tl, s.start, s.dur) * spb * art;
         lead(ctx, buses.lead, opts.timbre, s.midi, t, dur, accent);
       }
-      if (opts.metronome) for (let j = 0; j < beats; j++) click(ctx, buses.met, st + j * spb, j % 4 === 0);
+      if (opts.metronome) {
+        for (let j = 0; j < beats; j++) {
+          if (opts.metronome24 && j % 2 === 0) continue; // only beats 2 and 4
+          click(ctx, buses.met, st + j * spb, !opts.metronome24 && j % 4 === 0);
+        }
+      }
+      // The drummer swings every beat (2/3 ride skip) whatever the lead does, so drums use the plain swing grid,
+      // not the lead's per-beat timeline (which plays beats straight where the lead has 16ths or triplets).
+      if (opts.piano && opts.drums) {
+        for (const e of drumEvents(cur.totalTicks, { seed: cur.seed * 131 + passIndex })) drum(ctx, buses.drums, e.kind, st + tickToBeats(e.tick, opts.swing) * spb, e.vel);
+      }
       for (const e of compEv) {
         const t = st + tl(e.tick) * spb;
         const d = timelineSpan(tl, e.tick, e.dur) * spb;
@@ -203,10 +224,11 @@ export class Player {
     }
   }
 
-  setVolumes(leadV: number, pianoV: number): void {
+  setVolumes(leadV: number, pianoV: number, drumV?: number): void {
     if (!this.buses || !this.ctx) return;
     const t = this.ctx.currentTime;
     this.buses.lead.gain.setTargetAtTime(leadV, t, 0.02);
     this.buses.piano.gain.setTargetAtTime(pianoV, t, 0.02);
+    if (drumV !== undefined) this.buses.drums.gain.setTargetAtTime(drumV, t, 0.02);
   }
 }

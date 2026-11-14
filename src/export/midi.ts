@@ -1,7 +1,8 @@
 import type { Lick } from '../types';
 import { TPB } from '../types';
 import { bassEvents, compEvents, type CompEvent, type CompStyle } from '../audio/comping';
-import { makeTimeline, soundingNotes, type Timeline } from '../audio/timing';
+import { drumEvents } from '../audio/drums';
+import { makeTimeline, soundingNotes, tickToBeats, type Timeline } from '../audio/timing';
 
 const PPQ = 480;
 
@@ -11,7 +12,12 @@ export interface MidiOptions {
   program?: number;
   /** With swing: keep 16th-note beats straight (default false = legacy swung 16ths). */
   straight16?: boolean;
+  /** With comping: add a drum track on channel 10 (default true). */
+  drums?: boolean;
 }
+
+/** General MIDI percussion notes. */
+const GM_DRUM = { ride: 51, hat: 44, kick: 36, snare: 38 } as const;
 
 interface Ev { t: number; order: number; bytes: number[] }
 
@@ -82,6 +88,17 @@ export function lickToMidi(lick: Lick, opts: MidiOptions): Uint8Array {
       ...noteEvents(bassEvents(lick.chords), 2, 88, tl),
     ];
     tracks.push(trackChunk(piano, endTick), trackChunk(bass, endTick));
+    if (opts.drums !== false) {
+      const hits: Ev[] = [{ t: 0, order: -2, bytes: meta(0x03, str('Drums')) }];
+      // drums swing every beat on the plain grid (see player.ts), independent of the lead's straight 16ths/triplets
+      const drumTl: Timeline = t => tickToBeats(t, opts.swing);
+      for (const e of drumEvents(lick.totalTicks, { seed: lick.seed })) {
+        const on = tk(e.tick, drumTl);
+        hits.push({ t: on, order: 1, bytes: [0x99, GM_DRUM[e.kind], Math.max(1, Math.round(e.vel * 100))] });
+        hits.push({ t: on + 60, order: 0, bytes: [0x89, GM_DRUM[e.kind], 0] });
+      }
+      tracks.push(trackChunk(hits, endTick));
+    }
   }
   const header = [0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, tracks.length, (PPQ >> 8) & 255, PPQ & 255];
   return Uint8Array.from([...header, ...tracks.flat()]);

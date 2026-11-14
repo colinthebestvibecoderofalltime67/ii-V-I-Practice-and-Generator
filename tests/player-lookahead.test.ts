@@ -7,6 +7,7 @@ vi.mock('../src/audio/synth', () => ({
   click: (_c: unknown, _o: unknown, t: number) => note('click', t),
   piano: (_c: unknown, _o: unknown, _m: number, t: number) => note('piano', t),
   bass: (_c: unknown, _o: unknown, _m: number, t: number) => note('bass', t),
+  drum: (_c: unknown, _o: unknown, _k: string, t: number) => note('drum', t),
 }));
 
 import { PASS_LOOKAHEAD, Player, type PlayOptions } from '../src/audio/player';
@@ -26,7 +27,7 @@ class FakeCtx {
   suspend() { return Promise.resolve(); }
 }
 const opts = (o: Partial<PlayOptions> = {}): PlayOptions => ({
-  bpm: 200, swing: false, straight16: true, loop: true, metronome: true, countIn: false, piano: true, comp: 'rootless',
+  bpm: 200, swing: false, straight16: true, loop: true, metronome: true, countIn: false, piano: true, drums: true, comp: 'rootless',
   leadVolume: 0.8, pianoVolume: 0.6, timbre: 'reed', ...o,
 });
 

@@ -6,3 +6,6 @@ screenshots
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Vitest report output
+.vitest/

@@ -87,10 +87,15 @@ interface Pools {
   get(q: ChordQualityId, beats: 2 | 4, ending: boolean): Fragment[];
 }
 
+/** Pools are built once per fragment list (the library is large; validating it on every lick was the main cost). */
+const poolCache = new WeakMap<readonly Fragment[], Pools>();
+
 function makePools(frags: Fragment[]): Pools {
+  const hit = poolCache.get(frags);
+  if (hit) return hit;
   const valid = frags.filter(isValidFragment);
   const cache = new Map<string, Fragment[]>();
-  return {
+  const pools: Pools = {
     get(q, beats, ending) {
       const key = `${q}|${beats}|${ending ? 1 : 0}`;
       let v = cache.get(key);
@@ -102,6 +107,8 @@ function makePools(frags: Fragment[]): Pools {
       return v;
     },
   };
+  poolCache.set(frags, pools);
+  return pools;
 }
 
 /* ------------------------------ planning ------------------------------ */

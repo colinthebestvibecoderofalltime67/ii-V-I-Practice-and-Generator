@@ -309,6 +309,9 @@ interface CellInfo {
   altHeld: boolean;
   nat11: boolean;
   sharp11: boolean;
+  /** Has a b9 / b13 (the colour a secondary dominant wants), and a natural 13 stressed (on a beat or held a beat): it clashes with the b3 of the ii it resolves to. */
+  flat9or13: boolean;
+  nat13Strong: boolean;
   /** Last pitched note, rel mod 12. */
   lastRel: number;
   firstRel: number;
@@ -324,6 +327,8 @@ function cellInfo(f: Fragment): CellInfo {
     const rels: number[] = [];
     let alt = 0;
     let altHeld = false;
+    let flat9or13 = false;
+    let nat13Strong = false;
     let t = 0;
     f.notes.forEach((n, i) => {
       if (n.rel != null && !(i > 0 && f.notes[i - 1].tie && f.notes[i - 1].rel === n.rel)) {
@@ -332,7 +337,9 @@ function cellInfo(f: Fragment): CellInfo {
         if (r === 1 || r === 3 || r === 8) {
           alt++;
           if (t % TPB === 0 && n.dur >= TPB) altHeld = true;
+          if (r !== 3) flat9or13 = true;
         }
+        if (r === 9 && (t % TPB === 0 || n.dur >= TPB)) nat13Strong = true;
       }
       t += n.dur;
     });
@@ -340,7 +347,7 @@ function cellInfo(f: Fragment): CellInfo {
     s = {
       rels: m.join(','), shape: rels.slice(1).map((r, i) => r - rels[i]).join(','),
       first3: m.slice(0, 3).join(','), last2: m.slice(-2).join(','),
-      pcs: new Set(m), attacks: m.length, alt, altHeld, nat11: m.includes(5), sharp11: m.includes(6), lastRel: m[m.length - 1], firstRel: m[0],
+      pcs: new Set(m), attacks: m.length, alt, altHeld, nat11: m.includes(5), sharp11: m.includes(6), flat9or13, nat13Strong, lastRel: m[m.length - 1], firstRel: m[0],
       dotted: f.notes.some((n, i) => n.dur === 9 && f.notes[i + 1]?.dur === 3),
       firstGuide: (q: ChordQualityId) => CHORDS[q].guide.some(g => mod12(g) === m[0]),
     };
@@ -367,9 +374,18 @@ function roleWeight(f: Fragment, q: ChordQualityId, role: ChordRole, level: numb
     if (c.nat11) w *= 0.08;
   } else if (q === 'dom7' && role === 'primaryV' && c.sharp11 && !c.nat11 && c.alt === 0) w *= 0.3;
   else if (q === 'dom7' && role === 'secondary') {
-    // VI7 -> ii: Mixolydian first (no Lydian cells), with the b9 / #9 / b13 colour welcome from Intermediate up, not for Beginner
-    if (c.sharp11 && !c.nat11 && c.alt === 0) w *= 0.3;
-    if (c.alt > 0) w *= level < 1.5 ? 0.3 : level < 2.5 ? 1.6 : 2.5;
+    // VI7 -> ii: the b9 / b13 colour of a dominant that resolves to a MINOR chord, from Intermediate up (not for Beginner). The Lydian
+    // #11 sound and a stressed natural 13 (it clashes with the ii's b3: F# on A7 against Dm7's F) are out; the V7 of a major ii-V-I keeps them.
+    if (level < 1.5) { if (c.sharp11 && !c.nat11 && c.alt === 0) w *= 0.3; if (c.alt > 0) w *= 0.3; }
+    else {
+      if (c.sharp11 || c.nat13Strong) w *= 0.3;
+      if (c.flat9or13) {
+        // the library has few b9 / b13 cells above Level 2: a lower-level one is worth nearly as much as a level-matched cell here
+        const d = Math.abs(f.level - level);
+        w *= (level < 2.5 ? 3 : 8) * (d > 1 ? Math.min(8, lerpTable(LEVEL_WEIGHT, 1) / lerpTable(LEVEL_WEIGHT, d)) : 1);
+      }
+      else if (c.alt > 0) w *= level < 2.5 ? 1.6 : 2.5;
+    }
   }
   if (q === 'dom7alt' && c.alt < 2 && !c.altHeld) w *= level < 1.5 ? 0.8 : level < 2.5 ? 0.25 : 0.6;
   if (q === 'm7b5' && f.level >= 2 && !c.pcs.has(6)) w *= 0.2;
@@ -486,7 +502,7 @@ function baseWeights(
     x *= roleWeight(f, q, role, level);
     if (ending) {
       // the closing note: root/3rd/5th beat the 9th and the 6th (a 6th in the minor tonic is a Beginner/Intermediate trap)
-      if (ci0.lastRel === 2 && tier >= 3) x *= tier === 4 ? 0.3 : 0.4;
+      if (ci0.lastRel === 2 && tier >= 3) x *= tier === 4 ? 0.2 : 0.35;
       if (ci0.lastRel === 9) x *= q === 'maj7' ? (tier === 4 ? 0.25 : 0.8) : tier <= 2 ? 0.1 : tier === 3 ? 0.5 : 0.25;
     }
     if (first && !firstNoteOk(f, q)) x *= 0.2;
@@ -619,8 +635,9 @@ function buildPlan(
       // Weight factors that depend only on the cell, the chord and the round (level, sharpness) are computed once per round.
       let slots = roundCache.get(pd);
       if (!slots) { slots = new Array(20); roundCache.set(pd, slots); }
-      // interior chords of a chain of more than three chords land on a guide tone like a dominant does (classic ii-V-I: unchanged)
-      const chainLanding = chords.length > 3 && ci > 0 && !isLastSlot;
+      // interior chords of a chain of more than three chords land on a guide tone like a dominant does, and so does the final chord (the
+      // resolution is as important as any interior change)
+      const chainLanding = (chords.length > 3 && ci > 0 && !isLastSlot) || isLastSlot;
       let slot = (ROLE_SLOT[roles[ci]] * 2 + (pi === 0 ? 1 : 0)) * 2 + (chainLanding ? 1 : 0);
       // Focus concepts that depend on the neighbouring chord get their own cache slot per context (never used without a concept)
       let ctx: CellCtx | undefined;
@@ -844,7 +861,7 @@ function landingPenalty(q: ChordQualityId, rel: number, last: boolean, chain = f
  */
 function closingPenalty(q: ChordQualityId, rel: number, tier: Tier): number {
   if (rel === 9) return q === 'maj7' ? (tier === 4 ? 2 : 0.4) : tier <= 2 ? 1.2 : tier === 3 ? 1 : 2;
-  if (rel === 2) return tier === 4 ? 1.6 : tier === 3 ? 1.2 : 0.4;
+  if (rel === 2) return tier === 4 ? 2.2 : tier === 3 ? 1.6 : 0.4;
   if (rel === 0) return 0.3;
   if (rel === 7) return 0.1;
   return CHORDS[q].tones.some(t => mod12(t) === rel) ? 0 : 0.6;
@@ -856,7 +873,7 @@ function closingPenalty(q: ChordQualityId, rel: number, tier: Tier): number {
  * on a Lydian dominant, no arpeggio noodling (a run of more than six chord-tone attacks within an octave), and no
  * long stepwise 16th run in the last bar.
  */
-function preference(events: Ev[], chords: LickChord[], comfort: [number, number], lydian: boolean[], tier: Tier): number {
+function preference(events: Ev[], chords: LickChord[], comfort: [number, number], lydian: boolean[], tier: Tier, secondary: boolean[]): number {
   const nC = chords.length;
   const nE = events.length;
   let pen = 0;
@@ -875,6 +892,12 @@ function preference(events: Ev[], chords: LickChord[], comfort: [number, number]
     while (ei < nE && events[ei].start + durs[ei] <= ch.start) ei++;
     const e = ei < nE && events[ei].start <= ch.start ? events[ei] : undefined;
     if (!e || e.midi == null) continue;
+    // one note held across a whole short dominant: its colour (the alteration, the Lydian #11) never sounds (Coltrane changes: F through D♭7)
+    if ((ch.quality === 'dom7' || ch.quality === 'dom7alt') && ch.dur === 2 * TPB && e.start + durs[ei] >= ch.start + ch.dur) {
+      let attacks = 0;
+      for (let k = ei; k < nE && events[k].start < ch.start + ch.dur; k++) if (events[k].midi != null && events[k].start >= ch.start) attacks++;
+      if (attacks <= 1) pen += 8;
+    }
     pen += landingPenalty(ch.quality, mod12(e.midi - ch.rootPc), ci === nC - 1, nC > 3 && ci > 0);
   }
   let closing: Ev | undefined;
@@ -915,6 +938,7 @@ function preference(events: Ev[], chords: LickChord[], comfort: [number, number]
     if (stressed && rel === 5 && (ch.quality === 'maj7' || (ch.quality === 'dom7' && lydian[ci]))) pen += 10; // avoid note
     if (rel === 5 && ch.quality === 'dom7' && lydian[ci]) pen += 4; // natural 11 on a Lydian dominant, stressed or not
     if ((rel === 1 || rel === 3 || rel === 8) && ch.quality === 'dom7' && lydian[ci]) pen += 3; // the altered sound is not Lydian dominant
+    if (tier >= 2 && secondary[ci] && stressed && rel === 9) pen += 3; // a stressed natural 13 on VI7 clashes with the b3 of the ii it resolves to
     if (ch.quality === 'dom7alt' && (rel === 1 || rel === 3 || rel === 8)) flags[3 * ci] = 1;
     // altered-tone count and m7b5's b5 judge each event on the chord it starts in (not the arrival chord)
     const own = chords[cp];
@@ -1008,6 +1032,7 @@ export function generateLick(opts: GenerateOptions): Lick {
   // Lydian-dominant chords (tritone-sub bII7, backdoor bVII7): the natural 11 is an avoid note there
   const roles = chordRoles(def.slots);
   const lydian = roles.map(r => r === 'lyd');
+  const secondary = roles.map(r => r === 'secondary');
 
   let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number; pref: number; hit: boolean } | null = null;
   // Without a target the level is the tier (integer, exactly the original weighting). With a target it starts at
@@ -1030,7 +1055,7 @@ export function generateLick(opts: GenerateOptions): Lick {
       const notes = eventsToNotes(events, chords);
       const cost = lickCost(events, fragStarts, opts.range, fixes);
       const score = scoreLick(notes, chords, def).score;
-      let pref = preference(events, chords, fitRange, lydian, reqTier);
+      let pref = preference(events, chords, fitRange, lydian, reqTier, secondary);
       let outside = 0;
       for (const n of notes) if (n.midi != null) outside += Math.max(0, opts.range[0] - n.midi, n.midi - opts.range[1]);
       pref += outside * 60; // the hard range outranks everything

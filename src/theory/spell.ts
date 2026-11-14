@@ -2,6 +2,7 @@ import type { ChordQualityId, Instrument, Lick, Mode } from '../types';
 import { CHORDS } from './chords';
 import { keySignatureName, keyUsesSharps, mod12 } from './pitch';
 import { judgedChord } from './rhythm';
+import { PROGRESSIONS } from './progressions';
 
 /**
  * Note spelling (pure, no DOM).
@@ -134,60 +135,150 @@ export interface NoteContext {
   halfStepDownToChordTone?: boolean;
   /** Fallback for a chromatic note with no direction when the root has no accidental. */
   sharps?: boolean;
+  /**
+   * The chord is a secondary dominant (VI7 -> ii) with its ♭9 and ♭13 (the analysis labels them so): ♭9 is written on the 9th's
+   * letter (D♭ over C7, not C♯) and ♭13 on the 13th's (A♭, not G♯).
+   */
+  secondaryDom?: boolean;
+  /** The note rises a half step to a note spelled `lowerNeighbourOf`: written on the letter below it (E♯ under F♯, D♯ under E, B♯ under C♯). */
+  lowerNeighbourOf?: Spelled;
 }
 
 /** Spell a MIDI pitch (in whatever pitch space the root is in) over a chord. */
 export function spellNote(midi: number, ctx: NoteContext): SpelledNote {
   const pc = mod12(midi);
   const rootPc = spelledPc(ctx.root);
-  const step = STEPS[ctx.quality][mod12(pc - rootPc)];
-  let s: Spelled;
+  const rel = mod12(pc - rootPc);
+  let step = STEPS[ctx.quality][rel];
+  if (ctx.secondaryDom && ctx.quality === 'dom7' && (rel === 1 || rel === 8)) step = rel === 1 ? 1 : 5;
+  const ri = letterIdx(ctx.root.letter);
+  let s: Spelled | undefined;
   if (step != null) s = degree(ctx.root, ctx.quality, step, pc);
   else {
-    const white = LETTER_PC.indexOf(pc);
-    if (white >= 0) s = ctx.halfStepDownToChordTone && (pc === 11 || pc === 4) ? onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc) : onLetter(white, pc);
-    else {
-      const sharp = ctx.direction ? ctx.direction === 'up' : ctx.root.acc !== 0 ? ctx.root.acc > 0 : !!ctx.sharps;
-      s = sharp ? onLetter(LETTER_PC.indexOf(mod12(pc - 1)), pc) : onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc);
+    // the major 7th as a passing / leading tone over a dominant or minor 7th is the 7th letter's sharp (A♯ over B7, C♯ over Dm7)
+    if (rel === 11 && (ctx.quality === 'dom7' || ctx.quality === 'm7')) {
+      const alt = onLetter(ri + 6, pc);
+      if (Math.abs(alt.acc) <= 1 && !isWeird(alt)) s = alt;
+    }
+    // a lower neighbour is written relative to its target: the letter below it
+    if (!s && ctx.lowerNeighbourOf) {
+      const alt = onLetter(letterIdx(ctx.lowerNeighbourOf.letter) - 1, pc);
+      if (Math.abs(alt.acc) <= 1) s = alt;
+    }
+    if (!s) {
+      const white = LETTER_PC.indexOf(pc);
+      if (white >= 0) s = ctx.halfStepDownToChordTone && (pc === 11 || pc === 4) ? onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc) : onLetter(white, pc);
+      else {
+        const sharp = ctx.direction ? ctx.direction === 'up' : ctx.root.acc !== 0 ? ctx.root.acc > 0 : !!ctx.sharps;
+        s = sharp ? onLetter(LETTER_PC.indexOf(mod12(pc - 1)), pc) : onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc);
+      }
     }
   }
-  return { ...s, octave: Math.floor((midi - s.acc) / 12) - 1 };
+  return { ...s, octave: octaveOf(midi, s) };
+}
+
+const octaveOf = (midi: number, s: Spelled): number => Math.floor((midi - s.acc) / 12) - 1;
+
+/** Respell a pitch as the sharp of the letter below (up) or the flat of the letter above (down); null for a white key. */
+function respellDir(midi: number, up: boolean): SpelledNote | null {
+  const pc = mod12(midi);
+  if (LETTER_PC.indexOf(pc) >= 0) return null;
+  const s = up ? onLetter(LETTER_PC.indexOf(mod12(pc - 1)), pc) : onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc);
+  return { ...s, octave: octaveOf(midi, s) };
 }
 
 /**
  * Written spelling of every lick note (null for rests), for an instrument: spelled in the WRITTEN key over the
  * written chord root. Index = lick.notes index (the renderer reuses it for every tied piece of a note).
+ *
+ * Chromatic (non-degree) notes are spelled in three layers: the note itself (the chord and direction, see spellNote), the
+ * target it resolves to (a half-step lower neighbour is the letter below its target), and the chord's bar as a whole
+ * (the same pitch class over the same chord keeps one spelling, and free chromatic notes follow the sharps or flats of the
+ * resolving ones in that bar, so a figure is not written D♭ A♯ B).
  */
 export function spellLick(lick: Lick, inst: Instrument): (SpelledNote | null)[] {
   const t = inst.transpose;
   const key = mod12(lick.keyPc + t);
   const sharps = keyUsesSharps(key, lick.mode);
   const roots = lick.chords.map(c => spellChordRoot(mod12(c.rootPc + t), c.quality, key, lick.mode));
-  const out: (SpelledNote | null)[] = [];
-  lick.notes.forEach((n, i) => {
-    if (n.midi == null) { out.push(null); return; }
+  const slots = PROGRESSIONS.find(p => p.id === lick.progressionId)?.slots;
+  const n = lick.notes.length;
+  const out: (SpelledNote | null)[] = new Array(n).fill(null);
+  const done: boolean[] = new Array(n).fill(false);
+  /** 'cont' = tied continuation of an earlier note; 'resolve' = moves a half step; 'free' = other chromatic note; 'fixed' = a degree of its chord. */
+  const kind: ('cont' | 'resolve' | 'free' | 'fixed')[] = new Array(n).fill('fixed');
+  const chordOf: number[] = new Array(n).fill(0);
+
+  const spellAt = (i: number): SpelledNote | null => {
+    if (done[i]) return out[i];
+    done[i] = true;
+    const note = lick.notes[i];
+    if (note.midi == null) return null;
     const prev = lick.notes[i - 1];
     // a tied continuation keeps the head's spelling, even across a chord change
-    if (prev && prev.tie && prev.midi === n.midi && out[i - 1]) { out.push(out[i - 1]); return; }
+    if (prev && prev.tie && prev.midi === note.midi && spellAt(i - 1)) { kind[i] = 'cont'; return (out[i] = out[i - 1]); }
     // an anticipation is spelled over the chord it arrives on (a tied-in 3rd of the I is that chord's 3rd)
     const ci = judgedChord(lick.notes, i);
+    chordOf[i] = ci;
     const c = lick.chords[ci];
     let j = i;
     while (lick.notes[j].tie && lick.notes[j + 1]) j++;
     const next = lick.notes[j + 1];
-    const direction = next && next.midi != null && next.midi !== n.midi ? (next.midi > n.midi ? 'up' : 'down') : null;
+    const direction = next && next.midi != null && next.midi !== note.midi ? (next.midi > note.midi ? 'up' : 'down') : null;
     // A chromatic upper neighbour is written as a flat (C♭→B♭, F♭→E♭) only in flat contexts: the chord root is flat
     // and the chord tone it falls to is spelled flat. Over C7 the bebop line stays B→B♭; over B7alt, E→D♯.
     let halfStepDownToChordTone = false;
-    if (next && next.midi != null && next.midi === n.midi - 1 && roots[ci].acc < 0) {
+    if (next && next.midi != null && next.midi === note.midi - 1 && roots[ci].acc < 0) {
       const nci = judgedChord(lick.notes, j + 1);
       const nc = lick.chords[nci];
       if (CHORDS[nc.quality].tones.some(x => mod12(x) === mod12(next.midi! - nc.rootPc))) {
         halfStepDownToChordTone = spellNote(next.midi + t, { root: roots[nci], quality: nc.quality, direction: null, sharps }).acc < 0;
       }
     }
-    out.push(spellNote(n.midi + t, { root: roots[ci], quality: c.quality, direction, sharps, halfStepDownToChordTone }));
-  });
+    const secondaryDom = slots?.[ci]?.fn === 'secondaryDom';
+    const ctx: NoteContext = { root: roots[ci], quality: c.quality, direction, sharps, halfStepDownToChordTone, secondaryDom };
+    if (next && next.midi != null && next.midi === note.midi + 1) {
+      const target = spellAt(j + 1);
+      if (target) ctx.lowerNeighbourOf = target;
+    }
+    const sp = spellNote(note.midi + t, ctx);
+    const rel = mod12(note.midi + t - spelledPc(roots[ci]));
+    if (STEPS[c.quality][rel] == null && !(secondaryDom && c.quality === 'dom7' && (rel === 1 || rel === 8))) {
+      kind[i] = next && next.midi != null && Math.abs(next.midi - note.midi) === 1 ? 'resolve' : 'free';
+    }
+    return (out[i] = sp);
+  };
+  for (let i = 0; i < n; i++) spellAt(i);
+
+  // the same pitch class over the same chord keeps one spelling (the resolving note's, else the first free one's); free chromatic
+  // notes of a bar follow the sharps or flats of its resolving notes
+  const byChord = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    if (kind[i] !== 'resolve' && kind[i] !== 'free') continue;
+    const l = byChord.get(chordOf[i]);
+    if (l) l.push(i); else byChord.set(chordOf[i], [i]);
+  }
+  for (const idxs of byChord.values()) {
+    const resolveSign = new Set(idxs.filter(i => kind[i] === 'resolve' && out[i]!.acc !== 0).map(i => Math.sign(out[i]!.acc)));
+    const byPc = new Map<number, SpelledNote>();
+    for (const i of idxs) if (kind[i] === 'resolve' && !byPc.has(mod12(lick.notes[i].midi!))) byPc.set(mod12(lick.notes[i].midi!), out[i]!);
+    for (const i of idxs) {
+      if (kind[i] !== 'free') continue;
+      const pcI = mod12(lick.notes[i].midi!);
+      const ref = byPc.get(pcI);
+      if (ref) { out[i] = { ...ref, octave: octaveOf(lick.notes[i].midi! + t, ref) }; continue; }
+      if (out[i]!.acc !== 0 && resolveSign.size === 1 && !resolveSign.has(Math.sign(out[i]!.acc))) {
+        const r = respellDir(lick.notes[i].midi! + t, [...resolveSign][0] > 0);
+        if (r) out[i] = r;
+      }
+      byPc.set(pcI, out[i]!);
+    }
+  }
+  for (let i = 0; i < n; i++) if (kind[i] === 'cont') {
+    let h = i;
+    while (kind[h] === 'cont') h--;
+    out[i] = out[h];
+  }
   return out;
 }
 

@@ -45,6 +45,10 @@ if (process.env.JSON) {
     const e = m.endingShares;
     console.log(`${name.padEnd(12)} ${pct(m.lydianSharp11Share)} ${pct(m.lydianAlteredShare)} ${pct(m.noodleShare)} ${pct(m.finalSixteenthRunShare)} ${pct(m.anticipationClashShare)}  ${pct(m.altThinShare)}   ${pct(m.m7b5Flat5Share)}   ${pct(m.nearDuplicateShare)}   ${(['R', '3', '5', '7', '9', '6'] as const).map(d => (100 * e[d]).toFixed(0).padStart(3)).join(' ')}`);
   }
+  console.log('\nTier          VI7 b9  VI7 stressed natural 13  (turnaround / chain-36251 / coltrane licks of the sample)');
+  for (const [name, m] of ([1, 2, 3, 4] as Tier[]).map(t => [TIER_NAMES[t], summarize(full.all.filter(l => l.requestedTier === t && ['turnaround', 'chain-36251', 'coltrane'].includes(l.progressionId)))] as [string, MusicalitySummary])) {
+    console.log(`${name.padEnd(12)} ${pct(m.secDomFlat9Share)}  ${pct(m.secDomNat13StressedShare)}`);
+  }
   console.log('\nPer progression (all lengths and tiers)');
   console.log('Progression      licks  V-guide  chg-guide  leap10  16ths  noodle  endRepeat  nearDup  ending R/3/5/7/9/6');
   for (const p of PROGRESSIONS) {

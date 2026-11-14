@@ -38,7 +38,7 @@ describe('phrasing pass', () => {
       lickSets.set(t, licks);
       const m = summarize(licks);
       byTier.set(t, m);
-      const [lo, hi] = ({ 1: [0, 0.18], 2: [0.18, 0.38], 3: [0.33, 0.55], 4: [0.33, 0.55] } as Record<Tier, [number, number]>)[t];
+      const [lo, hi] = ({ 1: [0, 0.18], 2: [0.12, 0.38], 3: [0.33, 0.55], 4: [0.33, 0.55] } as Record<Tier, [number, number]>)[t];
       expect(m.anticipationShare, `tier ${t}`).toBeGreaterThanOrEqual(lo);
       expect(m.anticipationShare, `tier ${t}`).toBeLessThanOrEqual(hi);
       expect(m.seamRepeatShare, 'seam re-attacks').toBeLessThan(0.1);

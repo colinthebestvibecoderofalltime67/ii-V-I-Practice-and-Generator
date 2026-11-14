@@ -202,7 +202,9 @@ describe('note spelling', () => {
     expect(at('C', 'maj7', 66, 'up')).toBe('F♯4');
     expect(at('C', 'maj7', 66, 'down')).toBe('G♭4');
     expect(at('C', 'maj7', 65, 'down')).toBe('F4'); // white keys never get a spurious accidental
-    expect(at('D', 'm7', 61, null)).toBe('D♭4'); // no direction, no hint: flat
+    expect(at('D', 'm7', 61, null)).toBe('C♯4'); // the major 7th over a minor 7th is the 7th letter's sharp (was D♭)
+    expect(at('G', 'm7', 66, null)).toBe('F♯4');
+    expect(at('C', 'maj7', 61, null)).toBe('D♭4'); // no direction, no hint: flat
   });
   it('tied continuation over a chord change keeps its spelling', () => {
     // A minor: tie E7alt's G♯ into the Am6 bar

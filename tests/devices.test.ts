@@ -336,7 +336,7 @@ describe('Focus hit rates and slider accuracy', () => {
         for (const l of licks) expect(l.focus).toBe(c);
         const diff = sliderError(licks) - sliderError(conceptSample(undefined, t));
         maes.push(diff);
-        expect(diff, `${c} T${t}`).toBeLessThanOrEqual(1.1); // Expert guide tones is the weak spot (about +1.0)
+        expect(diff, `${c} T${t}`).toBeLessThanOrEqual(1.2); // Expert guide tones is the weak spot (about +1.0-1.15: the no-focus baseline now lands the final chord on a guide tone too)
       }, 40_000);
     }
   }

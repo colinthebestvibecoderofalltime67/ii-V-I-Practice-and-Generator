@@ -83,8 +83,11 @@ export function analyzeLick(lick: Lick, inst: Instrument): LickAnalysis {
     const continuation = prevTied;
     prevTied = !!n.tie && n.midi != null;
     if (n.midi == null || continuation) { notes.push(null); return; }
-    const c = lick.chords[judgedChord(lick.notes, i)]; // anticipations are labelled against the chord they arrive on
-    const kind = noteKind(n.midi, c.rootPc, c.quality);
+    const ci = judgedChord(lick.notes, i);
+    const c = lick.chords[ci]; // anticipations are labelled against the chord they arrive on
+    let kind = noteKind(n.midi, c.rootPc, c.quality);
+    // A secondary dominant (VI7 -> ii) is played with its b9, #9 and b13: tensions there, not chromatic passing notes.
+    if (kind === 'chromatic' && def.slots[ci]?.fn === 'secondaryDom' && [1, 3, 8].includes(mod12(n.midi - c.rootPc))) kind = 'tension';
     let approach = false;
     if (kind === 'chromatic') {
       let j = i;

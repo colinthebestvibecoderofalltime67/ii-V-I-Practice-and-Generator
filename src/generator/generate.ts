@@ -1,10 +1,10 @@
-import type { ChordQualityId, Fragment, LengthId, Lick, LickChord, LickNote, Tier } from '../types';
+import type { ChordQualityId, Fragment, LengthId, Lick, LickChord, LickNote, ProgressionSlot, Tier } from '../types';
 import { RENDERABLE_DURS, TICKS_PER_16TH, TPB, TPBAR } from '../types';
 import { FRAGMENTS } from '../fragments';
 import { CHORDS, inScale } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 import { findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm';
-import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
+import { expandProgression, getProgression, slotBeats } from '../theory/progressions';
 import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, scoreToPos, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
 import { type Ev, eventsToNotes, fixJoins, fixLeaps, leapPenalty, phraseEvents } from './connect';
@@ -192,12 +192,12 @@ interface PlanItem {
 const LEVEL_WEIGHT = [1, 0.3, 0.06, 0.02];
 
 /** What a dominant chord is doing in its progression: colours the cell choice (see cellWeight). */
-export type ChordRole = 'lyd' | 'primaryV' | 'alt' | 'other';
-export function chordRoles(progressionId: string, slots: readonly { roman: string; quality: ChordQualityId }[]): ChordRole[] {
-  return slots.map(sl =>
-    sl.roman === '♭II7' || sl.roman === '♭VII7' ? 'lyd'
-      : sl.quality === 'dom7alt' ? 'alt'
-        : progressionId === 'major-251' && sl.quality === 'dom7' ? 'primaryV' : 'other');
+export type ChordRole = 'lyd' | 'primaryV' | 'alt' | 'secondary' | 'other';
+const ROLE_OF_FN: Record<ProgressionSlot['fn'], ChordRole> = {
+  lydianDom: 'lyd', altV: 'alt', primaryV: 'primaryV', secondaryDom: 'secondary', tonic: 'other', predominant: 'other',
+};
+export function chordRoles(slots: readonly Pick<ProgressionSlot, 'fn'>[]): ChordRole[] {
+  return slots.map(sl => ROLE_OF_FN[sl.fn]);
 }
 
 /**
@@ -357,6 +357,11 @@ function roleWeight(f: Fragment, q: ChordQualityId, role: ChordRole, level: numb
     if (c.alt > 0) w *= 0.05;
     if (c.nat11) w *= 0.08;
   } else if (q === 'dom7' && role === 'primaryV' && c.sharp11 && !c.nat11 && c.alt === 0) w *= 0.3;
+  else if (q === 'dom7' && role === 'secondary') {
+    // VI7 -> ii: Mixolydian first (no Lydian cells), with the b9 / #9 / b13 colour welcome from Intermediate up, not for Beginner
+    if (c.sharp11 && !c.nat11 && c.alt === 0) w *= 0.3;
+    if (c.alt > 0) w *= level < 1.5 ? 0.3 : level < 2.5 ? 1.6 : 2.5;
+  }
   if (q === 'dom7alt' && c.alt < 2 && !c.altHeld) w *= level < 1.5 ? 0.8 : level < 2.5 ? 0.25 : 0.6;
   if (q === 'm7b5' && f.level >= 2 && !c.pcs.has(6)) w *= 0.2;
   if (c.attacks >= 7 && c.pcs.size <= 3) w *= 0.05;
@@ -380,13 +385,13 @@ interface BaseWeights {
 }
 /** Per round: pool -> BaseWeights by (role, first cell) slot. */
 type RoundCache = Map<PoolData, (BaseWeights | undefined)[]>;
-const ROLE_SLOT: Record<ChordRole, number> = { lyd: 0, primaryV: 1, alt: 2, other: 3 };
+const ROLE_SLOT: Record<ChordRole, number> = { lyd: 0, primaryV: 1, alt: 2, other: 3, secondary: 4 };
 
 /** Cells of a pool the previous picks single out (indexes of cells in the pool); `mask[i]` = recently heard. */
 interface AvoidInfo { mask: Uint8Array; list: number[] }
 
 function baseWeights(
-  pd: PoolData, q: ChordQualityId, role: ChordRole, level: number, sharp: number, tier: Tier, first: boolean, ending: boolean,
+  pd: PoolData, q: ChordQualityId, role: ChordRole, level: number, sharp: number, tier: Tier, first: boolean, ending: boolean, chainLanding: boolean,
 ): BaseWeights {
   const n = pd.n;
   const w = new Float64Array(n);
@@ -404,7 +409,7 @@ function baseWeights(
       if (ci0.lastRel === 9) x *= q === 'maj7' ? (tier === 4 ? 0.25 : 0.8) : tier <= 2 ? 0.1 : tier === 3 ? 0.5 : 0.25;
     }
     if (first && !firstNoteOk(f, q)) x *= 0.2;
-    if (first && (q === 'dom7' || q === 'dom7alt') && !ci0.firstGuide(q) && f.notes[0].rel != null) x *= 0.3; // a dominant arrives on its 3rd or 7th
+    if (first && (q === 'dom7' || q === 'dom7alt' || chainLanding) && !ci0.firstGuide(q) && f.notes[0].rel != null) x *= 0.3; // a dominant arrives on its 3rd or 7th (so does every interior chord of a long chain)
     w[i] = x;
     total += x;
     cum[i] = total;
@@ -529,10 +534,12 @@ function buildPlan(
       const pd = pools.get(q, b as 2 | 4, ending);
       // Weight factors that depend only on the cell, the chord and the round (level, sharpness) are computed once per round.
       let slots = roundCache.get(pd);
-      if (!slots) { slots = new Array(8); roundCache.set(pd, slots); }
-      const slot = ROLE_SLOT[roles[ci]] * 2 + (pi === 0 ? 1 : 0);
+      if (!slots) { slots = new Array(20); roundCache.set(pd, slots); }
+      // interior chords of a chain of more than three chords land on a guide tone like a dominant does (classic ii-V-I: unchanged)
+      const chainLanding = chords.length > 3 && ci > 0 && !isLastSlot;
+      const slot = (ROLE_SLOT[roles[ci]] * 2 + (pi === 0 ? 1 : 0)) * 2 + (chainLanding ? 1 : 0);
       let bw = slots[slot];
-      if (!bw) { bw = baseWeights(pd, q, roles[ci], level, sharp, tier, pi === 0, ending); slots[slot] = bw; }
+      if (!bw) { bw = baseWeights(pd, q, roles[ci], level, sharp, tier, pi === 0, ending, chainLanding); slots[slot] = bw; }
       let av: AvoidInfo | undefined;
       if (avoid) {
         av = avoidCache.get(pd);
@@ -710,11 +717,14 @@ function lickCost(events: Ev[], fragStarts: number[], range: [number, number], f
  * Landing penalty by the note's degree (semitones above the chord root), in "score points" so it can be added to the
  * candidate's distance from the target. Dominants must land on the 3rd or 7th; the tonic's best landings are the 3rd,
  * 7th/6th, then 9th and 5th (root weakest); other chords prefer a guide tone too.
+ * `chain`: an interior chord of a progression of more than three chords (turnaround, Coltrane changes): every change there is a
+ * resolution, so a non-dominant chord is also landed on its 3rd or 7th (the classic three-chord progressions keep their light preference).
  */
-function landingPenalty(q: ChordQualityId, rel: number, last: boolean): number {
+function landingPenalty(q: ChordQualityId, rel: number, last: boolean, chain = false): number {
   const c = CHORDS[q];
   if (c.guide.some(g => mod12(g) === rel)) return 0;
   if (q === 'dom7' || q === 'dom7alt') return rel === 0 ? 3 : 2.5;
+  if (chain && !last) return rel === 0 ? 2 : 1.5;
   if (last) {
     if (rel === 2 || rel === 7) return 0.15;
     if (rel === 0) return 1.8;
@@ -760,7 +770,7 @@ function preference(events: Ev[], chords: LickChord[], comfort: [number, number]
     while (ei < nE && events[ei].start + durs[ei] <= ch.start) ei++;
     const e = ei < nE && events[ei].start <= ch.start ? events[ei] : undefined;
     if (!e || e.midi == null) continue;
-    pen += landingPenalty(ch.quality, mod12(e.midi - ch.rootPc), ci === nC - 1);
+    pen += landingPenalty(ch.quality, mod12(e.midi - ch.rootPc), ci === nC - 1, nC > 3 && ci > 0);
   }
   let closing: Ev | undefined;
   for (let i = nE - 1; i >= 0; i--) if (events[i].midi != null) { closing = events[i]; break; }
@@ -815,7 +825,7 @@ function preference(events: Ev[], chords: LickChord[], comfort: [number, number]
       runLo = Math.min(runLo, e.midi);
       runHi = Math.max(runHi, e.midi);
       if (runHi - runLo > 12) { runLen = 1; runLo = e.midi; runHi = e.midi; } else runLen++;
-      if (runLen > 6 && tier >= 2) pen += (runLen === 7 ? 4 : 2) * (tier === 2 ? 0.6 : 1);
+      if (runLen > 6 && tier >= 2) pen += (runLen === 7 ? 4 : 2) * (tier === 2 ? 0.6 : 1) * (nC > 3 ? 2 : 1); // longer chains give more room to noodle: doubled there
     } else runLen = 0;
     // a stepwise 16th run in the last bar longer than four notes
     if (dur <= TICKS_PER_16TH && e.start >= endTick - TPBAR && prevMidi != null && Math.abs(e.midi - prevMidi) <= 2 && sixRun > 0) {
@@ -866,7 +876,7 @@ export function generateLick(opts: GenerateOptions): Lick {
   const seed = (opts.seed ?? randomSeed()) >>> 0;
   const keyPc = mod12(opts.keyPc);
   const chords = expandProgression(def, opts.length, keyPc);
-  const slotBeats = LENGTHS[opts.length].beats;
+  const beatsPerSlot = slotBeats(def, opts.length);
   const totalTicks = chords.reduce((a, c) => a + c.dur, 0);
   const comfort: [number, number] = opts.comfortRange
     ? [Math.max(opts.range[0], opts.comfortRange[0]), Math.min(opts.range[1], opts.comfortRange[1])]
@@ -878,7 +888,7 @@ export function generateLick(opts: GenerateOptions): Lick {
   const avoidCache = new Map<PoolData, AvoidInfo>();
   const fitMemo: FitMemo = new Map();
   // Lydian-dominant chords (tritone-sub bII7, backdoor bVII7): the natural 11 is an avoid note there
-  const roles = chordRoles(def.id, def.slots);
+  const roles = chordRoles(def.slots);
   const lydian = roles.map(r => r === 'lyd');
 
   let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number; pref: number } | null = null;
@@ -890,7 +900,7 @@ export function generateLick(opts: GenerateOptions): Lick {
     const roundScores: number[] = [];
     const roundCache: RoundCache = new Map();
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier, avoidSet, roles, roundCache, avoidCache);
+      const plan = buildPlan(rng, chords, beatsPerSlot, pools, level, sharp, reqTier, avoidSet, roles, roundCache, avoidCache);
       const octaves = chooseOctaves(plan, chords, fitRange, fitMemo);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range) + fixLeaps(events, opts.range);

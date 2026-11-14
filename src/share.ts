@@ -98,7 +98,7 @@ export function decodeLick(code: string): Lick | null {
   const targetScore = b[2] === 0 ? undefined : (b[2] - 1) / 2;
   if (targetScore !== undefined && targetScore > 100) return null;
 
-  const total = totalTicks(length);
+  const total = totalTicks(def, length);
   const notes: LickNote[] = [];
   const chords = expandProgression(def, length, keyPc);
   let i = 3;

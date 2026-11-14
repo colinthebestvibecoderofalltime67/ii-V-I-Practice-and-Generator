@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SCALE_NAMES, analyzeLick, degreeLabel, noteKind } from '../src/theory/analyze';
 import { CHORDS } from '../src/theory/chords';
 import { getInstrument } from '../src/instruments';
-import { expandProgression, getProgression } from '../src/theory/progressions';
+import { PROGRESSIONS, expandProgression, getProgression } from '../src/theory/progressions';
 import { generateLick } from '../src/generator';
 import { concertRange } from '../src/instruments';
 import type { ChordQualityId, Lick, LickNote } from '../src/types';
@@ -151,7 +151,7 @@ describe('chromatic labels follow the sheet spelling', () => {
     const { spellLick } = await import('../src/theory/spell');
     const inst = getInstrument('alto');
     let checked = 0;
-    for (const p of ['major-251', 'major-251-alt', 'minor-251', 'tritone-251', 'backdoor-251']) {
+    for (const p of PROGRESSIONS.map(p => p.id)) {
       for (let seed = 1; seed <= 30; seed++) {
         const l = generateLick({ progressionId: p, length: 'standard', keyPc: seed % 12, tier: 4, range: concertRange(inst), seed });
         const a = analyzeLick(l, inst);

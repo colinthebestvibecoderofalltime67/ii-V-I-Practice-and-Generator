@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { bassEvents, compEvents, voiceChords, type CompStyle } from '../src/audio/comping';
 import { CHORDS } from '../src/theory/chords';
-import type { ChordQualityId, LickChord } from '../src/types';
+import type { ChordQualityId, LengthId, LickChord } from '../src/types';
+import { LENGTHS, PROGRESSIONS, expandProgression } from '../src/theory/progressions';
 import { TPB, TPBAR } from '../src/types';
 
 const QUALITIES = Object.keys(CHORDS) as ChordQualityId[];
@@ -60,6 +61,39 @@ describe('bass', () => {
         const next = ev.find(x => x.tick === ch[i + 1].start)!;
         expect(Math.abs(last.midi[0] - next.midi[0])).toBe(1);
       }
+    }
+  });
+});
+
+describe('comping and bass over every registered progression (2-beat chords included)', () => {
+  it('bass: a root on each chord, one quarter per beat, a half-step approach into the next root, inside 36-55', () => {
+    for (const p of PROGRESSIONS) for (const length of Object.keys(LENGTHS) as LengthId[]) for (const key of [0, 4, 7, 10]) {
+      const chords = expandProgression(p, length, key);
+      const bass = bassEvents(chords);
+      const label = `${p.id}/${length}/k${key}`;
+      chords.forEach((c, i) => {
+        const inChord = bass.filter(e => e.tick >= c.start && e.tick < c.start + c.dur);
+        if (i === chords.length - 1) { expect(inChord.length, `${label} last`).toBe(1); expect(inChord[0].dur).toBe(c.dur); return; }
+        expect(inChord.length, `${label} ${c.symbol} one note per beat`).toBe(c.dur / TPB);
+        expect(((inChord[0].midi[0] % 12) + 12) % 12, `${label} ${c.symbol} starts on its root`).toBe(c.rootPc);
+        const next = bass.find(e => e.tick === c.start + c.dur)!;
+        expect(Math.abs(inChord[inChord.length - 1].midi[0] - next.midi[0]), `${label} approach into ${chords[i + 1].symbol}`).toBe(1);
+      });
+      for (const e of bass) { expect(e.midi[0]).toBeGreaterThanOrEqual(36); expect(e.midi[0]).toBeLessThanOrEqual(55); }
+    }
+  });
+
+  it('piano: every chord is voiced inside its own span, with small movement between chords', () => {
+    for (const p of PROGRESSIONS) for (const style of ['rootless', 'block', 'sparse'] as CompStyle[]) {
+      const chords = expandProgression(p, 'short', 3);
+      const ev = compEvents(chords, style);
+      chords.forEach(c => {
+        const mine = ev.filter(e => e.tick >= c.start && e.tick < c.start + c.dur);
+        expect(mine.length, `${p.id} ${style} ${c.symbol}`).toBeGreaterThan(0);
+        for (const e of mine) expect(e.tick + e.dur, `${p.id} ${style} ${c.symbol}`).toBeLessThanOrEqual(c.start + c.dur);
+      });
+      const v = voiceChords(chords, style);
+      for (let i = 1; i < v.length; i++) expect(v[i].reduce((s, m, k) => s + Math.abs(m - v[i - 1][Math.min(k, v[i - 1].length - 1)]), 0), `${p.id} ${style} chord ${i}`).toBeLessThanOrEqual(30);
     }
   });
 });

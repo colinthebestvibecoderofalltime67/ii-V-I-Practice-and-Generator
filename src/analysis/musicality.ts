@@ -7,6 +7,7 @@ import type { Lick, LickNote } from '../types';
 import { TPB } from '../types';
 import { CHORDS, inScale } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
+import { getProgression } from '../theory/progressions';
 import { anticipationFitsOldChord } from '../generator/connect';
 
 /** Degree label of the closing note, for the ending-tone distribution. */
@@ -38,6 +39,8 @@ export interface LickMetrics {
   seamRepeats: number;
   /** For each dominant chord: is the note sounding as it arrives its 3rd or 7th? (null = no note sounding) */
   dominantArrivalGuide: (boolean | null)[];
+  /** For every chord change (not the first chord): does the note sounding as the chord arrives (an anticipation counts) carry one of its guide tones? null = rest. */
+  changeArrivalGuide: (boolean | null)[];
   /** Natural 5th or natural 13th attacked on a beat over a 7alt chord. */
   altNaturalOnBeat: number;
   /** Non-scale (chromatic) notes attacked on a beat and held a beat or longer. */
@@ -104,6 +107,13 @@ export function lickMetrics(lick: Lick): LickMetrics {
     return CHORDS[ch.quality].guide.some(g => mod12(g) === rel);
   }).filter((v): v is boolean | null => v !== undefined);
 
+  const changeArrivalGuide = chords.slice(1).map(ch => {
+    const a = att.find(x => x.start <= ch.start && x.start + x.dur > ch.start);
+    if (!a) return null;
+    const rel = mod12(a.midi - ch.rootPc);
+    return CHORDS[ch.quality].guide.some(g => mod12(g) === rel);
+  });
+
   let altNaturalOnBeat = 0;
   let longChromaticOnBeat = 0;
   for (const a of att) {
@@ -123,13 +133,14 @@ export function lickMetrics(lick: Lick): LickMetrics {
     [att.some(a => a.chord === ci && [1, 3, 8].includes(mod12(a.midi - ch.rootPc)))]);
   let maj7FourthStressed = 0;
   let lydianDomEleven = 0;
-  const lydianDom = lick.progressionId === 'tritone-251' || lick.progressionId === 'backdoor-251';
+  const slots = getProgression(lick.progressionId).slots;
+  const isLydChord = (ci: number) => slots[ci]?.fn === 'lydianDom' && chords[ci].quality === 'dom7';
   for (const a of att) {
     const ch = chords[a.chord];
     const rel = mod12(a.midi - ch.rootPc);
     const stressed = a.start % TPB === 0 || a.dur >= TPB;
     if (stressed && ch.quality === 'maj7' && rel === 5) maj7FourthStressed++;
-    if (stressed && lydianDom && ch.quality === 'dom7' && rel === 5) lydianDomEleven++;
+    if (stressed && isLydChord(a.chord) && rel === 5) lydianDomEleven++;
   }
   let dottedPairs = 0;
   const notes = lick.notes;
@@ -138,7 +149,6 @@ export function lickMetrics(lick: Lick): LickMetrics {
   }
   const endingRepeat = att.length > 1 && att[att.length - 1].midi === att[att.length - 2].midi;
 
-  const isLydChord = (ci: number) => lydianDom && chords[ci].quality === 'dom7';
   const lydianSharp11: boolean[] = [];
   const lydianAltered: boolean[] = [];
   chords.forEach((ch, ci) => {
@@ -201,7 +211,7 @@ export function lickMetrics(lick: Lick): LickMetrics {
     if (p.slice(0, 3).join() === q.slice(0, 3).join() || p.slice(-2).join() === q.slice(-2).join()) nearDuplicatePairs++;
   }
   return {
-    anticipations, startsWithRest, seamRepeats, dominantArrivalGuide, altNaturalOnBeat, longChromaticOnBeat, span,
+    anticipations, startsWithRest, seamRepeats, dominantArrivalGuide, changeArrivalGuide, altNaturalOnBeat, longChromaticOnBeat, span,
     bigLeaps, sixteenths, attackCount: att.length, altColoured, maj7FourthStressed, dottedPairs, lydianDomEleven, endingRepeat,
     lydianSharp11, lydianAltered, noodleRun, finalSixteenthRun, ending, anticipationClashes, altThin, m7b5Flat5, cellPairs, nearDuplicatePairs,
   };
@@ -216,6 +226,8 @@ export interface MusicalitySummary {
   seamRepeatShare: number;
   /** Share of dominant arrivals landing on the 3rd or 7th (arrivals with no sounding note excluded). */
   dominantGuideShare: number;
+  /** Share of ALL chord changes (every chord after the first) arrived on a guide tone of the new chord (rests excluded). */
+  changeGuideShare: number;
   /** Natural 5/13 on-beat attacks over 7alt per 1,000 attacks. */
   altNaturalPerK: number;
   longChromaticPerK: number;
@@ -257,7 +269,7 @@ export interface MusicalitySummary {
 }
 
 export function summarize(licks: readonly Lick[]): MusicalitySummary {
-  let ant = 0, rest = 0, seam = 0, guideHit = 0, guideN = 0, altNat = 0, longChr = 0, nAtt = 0;
+  let ant = 0, rest = 0, seam = 0, guideHit = 0, guideN = 0, chgHit = 0, chgN = 0, altNat = 0, longChr = 0, nAtt = 0;
   let leap = 0, six = 0, altN = 0, altPlain = 0, fourth = 0, dotted = 0, lyd = 0, lydN = 0, endRep = 0;
   const cellUse = new Map<string, number>();
   let lsN = 0, ls = 0, laN = 0, la = 0, nood = 0, f16 = 0, clash = 0, antN = 0, thinN = 0, thin = 0, flatN = 0, flat = 0, pairs = 0, dupPairs = 0;
@@ -268,6 +280,7 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     if (m.startsWithRest) rest++;
     if (m.seamRepeats > 0) seam++;
     for (const g of m.dominantArrivalGuide) if (g !== null) { guideN++; if (g) guideHit++; }
+    for (const g of m.changeArrivalGuide) if (g !== null) { chgN++; if (g) chgHit++; }
     altNat += m.altNaturalOnBeat;
     longChr += m.longChromaticOnBeat;
     nAtt += m.attackCount;
@@ -276,7 +289,7 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     for (const c of m.altColoured) { altN++; if (!c) altPlain++; }
     if (m.maj7FourthStressed > 0) fourth++;
     if (m.dottedPairs >= 2) dotted++;
-    if (l.progressionId === 'tritone-251' || l.progressionId === 'backdoor-251') { lydN++; if (m.lydianDomEleven > 0) lyd++; }
+    if (getProgression(l.progressionId).slots.some(s => s.fn === 'lydianDom')) { lydN++; if (m.lydianDomEleven > 0) lyd++; }
     if (m.endingRepeat) endRep++;
     for (const v of m.lydianSharp11) { lsN++; if (v) ls++; }
     for (const v of m.lydianAltered) { laN++; if (v) la++; }
@@ -301,6 +314,7 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     startsWithRestShare: rest / n,
     seamRepeatShare: seam / n,
     dominantGuideShare: guideN ? guideHit / guideN : 0,
+    changeGuideShare: chgN ? chgHit / chgN : 0,
     altNaturalPerK: (1000 * altNat) / Math.max(1, nAtt),
     longChromaticPerK: (1000 * longChr) / Math.max(1, nAtt),
     topCellShare: top / n,

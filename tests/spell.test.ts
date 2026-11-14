@@ -66,6 +66,84 @@ describe('chord roots by function', () => {
   });
 });
 
+/**
+ * Chord symbols of the longer progressions in every concert key (piano: written = concert). Reads like a lead sheet:
+ * turnaround / chain VI7 = degree 9 (A7 in C, never B𝄫7), Coltrane's cycle E♭7 A♭maj7 B7 Emaj7 G7 in C (B7 not C♭7, Emaj7 not F♭maj7),
+ * Gm7 A♭7 D♭maj7 E7 Amaj7 C7 Fmaj7 in F, and the cleaner enharmonic (B instead of C♭, E7 instead of F♭7) wherever a root would be awkward.
+ */
+const LONG_SYMBOLS: Record<string, string[][]> = {
+  'turnaround': [
+    ['Cmaj7', 'A7', 'Dm7', 'G7', 'Cmaj7'],
+    ['D♭maj7', 'B♭7', 'E♭m7', 'A♭7', 'D♭maj7'],
+    ['Dmaj7', 'B7', 'Em7', 'A7', 'Dmaj7'],
+    ['E♭maj7', 'C7', 'Fm7', 'B♭7', 'E♭maj7'],
+    ['Emaj7', 'C♯7', 'F♯m7', 'B7', 'Emaj7'],
+    ['Fmaj7', 'D7', 'Gm7', 'C7', 'Fmaj7'],
+    ['G♭maj7', 'E♭7', 'A♭m7', 'D♭7', 'G♭maj7'],
+    ['Gmaj7', 'E7', 'Am7', 'D7', 'Gmaj7'],
+    ['A♭maj7', 'F7', 'B♭m7', 'E♭7', 'A♭maj7'],
+    ['Amaj7', 'F♯7', 'Bm7', 'E7', 'Amaj7'],
+    ['B♭maj7', 'G7', 'Cm7', 'F7', 'B♭maj7'],
+    ['Bmaj7', 'G♯7', 'C♯m7', 'F♯7', 'Bmaj7'],
+  ],
+  'chain-36251': [
+    ['Em7', 'A7', 'Dm7', 'G7', 'Cmaj7'],
+    ['Fm7', 'B♭7', 'E♭m7', 'A♭7', 'D♭maj7'],
+    ['F♯m7', 'B7', 'Em7', 'A7', 'Dmaj7'],
+    ['Gm7', 'C7', 'Fm7', 'B♭7', 'E♭maj7'],
+    ['G♯m7', 'C♯7', 'F♯m7', 'B7', 'Emaj7'],
+    ['Am7', 'D7', 'Gm7', 'C7', 'Fmaj7'],
+    ['B♭m7', 'E♭7', 'A♭m7', 'D♭7', 'G♭maj7'],
+    ['Bm7', 'E7', 'Am7', 'D7', 'Gmaj7'],
+    ['Cm7', 'F7', 'B♭m7', 'E♭7', 'A♭maj7'],
+    ['C♯m7', 'F♯7', 'Bm7', 'E7', 'Amaj7'],
+    ['Dm7', 'G7', 'Cm7', 'F7', 'B♭maj7'],
+    ['D♯m7', 'G♯7', 'C♯m7', 'F♯7', 'Bmaj7'],
+  ],
+  'coltrane': [
+    ['Dm7', 'E♭7', 'A♭maj7', 'B7', 'Emaj7', 'G7', 'Cmaj7'],
+    ['E♭m7', 'E7', 'Amaj7', 'C7', 'Fmaj7', 'A♭7', 'D♭maj7'],
+    ['Em7', 'F7', 'B♭maj7', 'C♯7', 'F♯maj7', 'A7', 'Dmaj7'],
+    ['Fm7', 'G♭7', 'Bmaj7', 'D7', 'Gmaj7', 'B♭7', 'E♭maj7'],
+    ['F♯m7', 'G7', 'Cmaj7', 'E♭7', 'A♭maj7', 'B7', 'Emaj7'],
+    ['Gm7', 'A♭7', 'D♭maj7', 'E7', 'Amaj7', 'C7', 'Fmaj7'],
+    ['A♭m7', 'A7', 'Dmaj7', 'F7', 'B♭maj7', 'D♭7', 'G♭maj7'],
+    ['Am7', 'B♭7', 'E♭maj7', 'F♯7', 'Bmaj7', 'D7', 'Gmaj7'],
+    ['B♭m7', 'B7', 'Emaj7', 'G7', 'Cmaj7', 'E♭7', 'A♭maj7'],
+    ['Bm7', 'C7', 'Fmaj7', 'G♯7', 'C♯maj7', 'E7', 'Amaj7'],
+    ['Cm7', 'D♭7', 'G♭maj7', 'A7', 'Dmaj7', 'F7', 'B♭maj7'],
+    ['C♯m7', 'D7', 'Gmaj7', 'B♭7', 'E♭maj7', 'F♯7', 'Bmaj7'],
+  ],
+};
+
+describe('chord symbols of the longer progressions, every key', () => {
+  for (const [id, rows] of Object.entries(LONG_SYMBOLS)) {
+    it(id, () => {
+      rows.forEach((row, key) => {
+        expect(expandProgression(getProgression(id), 'standard', key).map(c => c.symbol), `${id} key ${key}`).toEqual(row);
+        // the analyze panel and the sheet use the same spelling
+        expect(chordSymbols(id, key), `${id} key ${key} (analyze)`).toEqual(row);
+      });
+    });
+  }
+  it('spot checks from the brief', () => {
+    expect(LONG_SYMBOLS['coltrane'][0]).toEqual(['Dm7', 'E♭7', 'A♭maj7', 'B7', 'Emaj7', 'G7', 'Cmaj7']);
+    expect(LONG_SYMBOLS['coltrane'][5]).toEqual(['Gm7', 'A♭7', 'D♭maj7', 'E7', 'Amaj7', 'C7', 'Fmaj7']);
+    expect(LONG_SYMBOLS['turnaround'][0]).toEqual(['Cmaj7', 'A7', 'Dm7', 'G7', 'Cmaj7']);
+    expect(LONG_SYMBOLS['chain-36251'][0]).toEqual(['Em7', 'A7', 'Dm7', 'G7', 'Cmaj7']);
+  });
+  it('no double accidentals in any chord root or chord scale of the longer progressions (major keys)', () => {
+    for (const id of Object.keys(LONG_SYMBOLS)) {
+      const def = getProgression(id);
+      for (let key = 0; key < 12; key++) for (const c of expandProgression(def, 'standard', key)) {
+        const root = spellChordRoot(c.rootPc, c.quality, key, def.mode);
+        expect(Math.abs(root.acc), `${id} ${key} ${c.symbol}`).toBeLessThanOrEqual(1);
+        expect(spellScale(root, c.quality).filter(n => Math.abs(n.acc) > 1).length, `${id} ${key} ${c.symbol} scale`).toBe(0);
+      }
+    }
+  });
+});
+
 describe('G♯ minor', () => {
   it('V is D♯7alt, not E♭7alt (alto sax, concert B minor)', () => {
     expect(rootsOf('minor-251', 11, getInstrument('alto-sax'))).toEqual(['A♯', 'D♯', 'G♯']);

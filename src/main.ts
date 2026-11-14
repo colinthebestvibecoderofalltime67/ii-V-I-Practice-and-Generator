@@ -3,7 +3,7 @@ import type { Instrument, Lick, Tier } from './types';
 import { TIER_NAMES, TPBAR } from './types';
 import { barOf } from './theory/rhythm';
 import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
-import { INSTRUMENTS, concertRange, getInstrument } from './instruments';
+import { INSTRUMENTS, concertRange, concertRangeForLevel, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
 import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from './difficulty/score';
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
@@ -24,6 +24,8 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
 const store = new Store();
 const settings: Settings = store.loadSettings();
 let history: StoredEntry[] = store.loadHistory();
+/** New licks avoid the cells of the last few licks, so a practice session keeps hearing new figures. */
+const RECENT_LICKS = 8;
 let favorites: StoredEntry[] = store.loadFavorites();
 let lick: Lick | null = null;
 /** The lick as generated or loaded, before any refit. Refits always start from it, so folding notes into a
@@ -37,6 +39,9 @@ const persist = (): void => store.saveSettings(settings);
 /** Slow practice is 60% of the tempo but never below the player's 40 bpm floor, so display, playback and MIDI agree. */
 const effectiveBpm = (): number => (settings.slow ? Math.max(40, Math.round(settings.bpm * 0.6)) : settings.bpm);
 const targetTier = (): Tier => tierForScore(posToScore(settings.target));
+/** Comfortable range for re-keying or re-fitting a lick: the level it was generated for, not the current slider. */
+const comfortFor = (l: Lick): [number, number] =>
+  concertRangeForLevel(inst(), l.targetScore !== undefined ? tierForScore(l.targetScore) : l.requestedTier);
 
 /** Highlight colour on the (always white) notation sheet. */
 const SHEET_ACCENT = '#2747C9';
@@ -53,10 +58,10 @@ const SHORT_NAME: Record<string, string> = {
   'backdoor-251': 'Backdoor',
 };
 const TIER_DESC: Record<Tier, string> = {
-  1: 'Quarter notes, chord tones',
-  2: 'Eighth notes, scale and arpeggio',
-  3: 'Enclosures, chromatic approaches',
-  4: '16th-note runs, altered colour',
+  1: 'Guide tones, simple rhythms',
+  2: 'Eighth-note lines, scale and arpeggio',
+  3: 'Enclosures, chromatic approaches, anticipations',
+  4: 'Altered colour, triplets, faster lines',
 };
 
 /** "Imaj7" -> "I", "V7alt" -> "V7alt", "iiø7" -> "iiø", "i6" -> "i". */
@@ -240,9 +245,12 @@ function tabIndex(): 'auto' | number {
 
 /* ---------------------------------------------------------------- display */
 
+/** Index of the note that most recently started during playback (a tied continuation in a new bar counts). */
+let currentNote = -1;
+
 function activeBar(): number | undefined {
   if (!lick || !highlight.length) return undefined;
-  const n = lick.notes[highlight[0]];
+  const n = lick.notes[currentNote >= 0 && highlight.includes(currentNote) ? currentNote : highlight[0]];
   return n ? barOf(n.start) : undefined;
 }
 
@@ -378,6 +386,8 @@ function generate(): void {
     tier: targetTier(),
     targetScore: posToScore(settings.target),
     range: concertRange(inst()),
+    comfortRange: concertRangeForLevel(inst(), targetTier()),
+    avoid: history.slice(0, RECENT_LICKS).flatMap(e => e.lick.fragmentIds),
     seed: randomSeed(),
   });
   if (settings.hide) { settings.hide = false; persist(); syncControls(); }
@@ -390,7 +400,7 @@ function refit(keyPc: number): void {
   stopPlayback();
   const old = lick.id;
   const base = sourceLick && sourceLick.id === old ? sourceLick : lick;
-  showLick(transposeLick(base, keyPc, concertRange(inst())), true, old, true);
+  showLick(transposeLick(base, keyPc, concertRange(inst()), comfortFor(base)), true, old, true);
 }
 
 function restartIfPlaying(): void {
@@ -416,8 +426,9 @@ function startPlayback(): void {
   highlight = [];
   const bars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
   player.play(lick, playOptions(), {
-    onNote: idx => {
+    onNote: (idx, cur) => {
       highlight = idx;
+      currentNote = cur ?? -1;
       const b = activeBar();
       if (b !== undefined) setStatus(`bar ${b + 1} / ${bars}`);
       if (!settings.hide) renderNotation();
@@ -522,7 +533,7 @@ function bind(): void {
     getFavorites: () => favorites,
     onLoad: l => {
       stopPlayback();
-      showLick(transposeLick(l, l.keyPc, concertRange(inst())), true);
+      showLick(transposeLick(l, l.keyPc, concertRange(inst()), comfortFor(l)), true);
     },
     onRemoveFavorite: id => { favorites = store.removeFavorite(id); updateFav(); },
     onClearHistory: () => { store.clearHistory(); history = []; },
@@ -646,7 +657,7 @@ syncControls();
 bind();
 if (history.length) {
   const h = history[0].lick;
-  showLick(transposeLick(h, h.keyPc, concertRange(inst())), false);
+  showLick(transposeLick(h, h.keyPc, concertRange(inst()), comfortFor(h)), false);
 } else {
   generate();
 }

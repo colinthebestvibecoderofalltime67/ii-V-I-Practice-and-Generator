@@ -1,6 +1,7 @@
 import type { ChordQualityId, Instrument, Lick, Mode } from '../types';
 import { CHORDS } from './chords';
 import { keySignatureName, keyUsesSharps, mod12 } from './pitch';
+import { judgedChord } from './rhythm';
 
 /**
  * Note spelling (pure, no DOM).
@@ -164,12 +165,14 @@ export function spellLick(lick: Lick, inst: Instrument): (SpelledNote | null)[] 
     const prev = lick.notes[i - 1];
     // a tied continuation keeps the head's spelling, even across a chord change
     if (prev && prev.tie && prev.midi === n.midi && out[i - 1]) { out.push(out[i - 1]); return; }
-    const c = lick.chords[n.chord];
+    // an anticipation is spelled over the chord it arrives on (a tied-in 3rd of the I is that chord's 3rd)
+    const ci = judgedChord(lick.notes, i);
+    const c = lick.chords[ci];
     let j = i;
     while (lick.notes[j].tie && lick.notes[j + 1]) j++;
     const next = lick.notes[j + 1];
     const direction = next && next.midi != null && next.midi !== n.midi ? (next.midi > n.midi ? 'up' : 'down') : null;
-    out.push(spellNote(n.midi + t, { root: roots[n.chord], quality: c.quality, direction, sharps }));
+    out.push(spellNote(n.midi + t, { root: roots[ci], quality: c.quality, direction, sharps }));
   });
   return out;
 }

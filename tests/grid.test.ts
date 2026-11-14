@@ -8,7 +8,7 @@ import { loadPrototypeLicks } from '../scripts/legacy';
 import { SWING_RATIO, tickToBeats } from '../src/audio/timing';
 import { scoreLick } from '../src/difficulty/score';
 import { lickToMidi } from '../src/export/midi';
-import { AUTHORED_FRAGMENTS, AUTHORED_UNIT, FRAGMENTS, fromSixteenths } from '../src/fragments';
+import { AUTHORED_FRAGMENTS, AUTHORED_UNIT, FRAGMENTS, VOCABULARY_FRAGMENTS, fromSixteenths } from '../src/fragments';
 import { TRIPLET_FRAGMENTS } from '../src/fragments/lib/triplets';
 import { generateLick } from '../src/generator';
 import { concertRange, getInstrument } from '../src/instruments';
@@ -62,8 +62,8 @@ describe('splitDur / bar helpers', () => {
 
 describe('fragments are authored in 16ths and scaled on load', () => {
   it('scales every duration by 3 without mutating the authored data', () => {
-    // FRAGMENTS = scaled 16th-grid libraries + the triplet library (already on the engine grid, appended last)
-    expect(FRAGMENTS.length).toBe(AUTHORED_FRAGMENTS.length + TRIPLET_FRAGMENTS.length);
+    // FRAGMENTS = scaled 16th-grid libraries + the Phase 2 vocabulary (also 16ths) + the triplet library (already on the engine grid, appended last)
+    expect(FRAGMENTS.length).toBe(AUTHORED_FRAGMENTS.length + VOCABULARY_FRAGMENTS.length + TRIPLET_FRAGMENTS.length);
     FRAGMENTS.slice(0, AUTHORED_FRAGMENTS.length).forEach((f, i) => {
       const a = AUTHORED_FRAGMENTS[i];
       expect(f.id).toBe(a.id);
@@ -104,11 +104,14 @@ describe('tickToBeats is unchanged on scaled ticks', () => {
   });
 });
 
-describe('scoreLick on the prototype licks equals the pre-migration scores', () => {
+// Pinned to the Phase 2b scorer (language-based Expert: capped 16ths, approach/phrasing features, cheap resolving altered notes).
+// The timing/grid checks above and the pinned MIDI below remain the migration guard; the original 55-lick calibration
+// (tier separation Beginner/Medium/Advanced) is asserted in tests/difficulty.test.ts.
+describe('scoreLick on the prototype licks (pinned to the current scorer)', () => {
   const prog = getProgression('major-251');
   const chords = expandProgression(prog, 'standard', 0);
   const expected: Record<number, number> = {
-    0: 0.2, 1: 0.8, 2: 0.8, 3: 13.6, 4: 1.8, 5: 0, 6: 6, 7: 0, 8: 3.2, 9: 6.9, 40: 9.7, 41: 15, 42: 5.8, 43: 13.7, 44: 35.4,
+    0: 1, 1: 1.6, 2: 1.6, 3: 13.9, 4: 2.6, 5: 0, 6: 5.1, 7: 0.8, 8: 3.2, 9: 8.6, 40: 10.8, 41: 15.8, 42: 6.5, 43: 12.6, 44: 40.4,
   };
   const licks = loadPrototypeLicks();
   for (const [i, score] of Object.entries(expected)) {
@@ -136,21 +139,21 @@ describe('generator output on the new grid', () => {
     for (const c of lick.chords) { expect(c.start % TPB).toBe(0); expect(c.dur % TPB).toBe(0); }
     for (const s of lick.cellStarts!) expect(s % TPB).toBe(0);
   });
-  it('reproduces the pre-migration lick (seed 3, tier 3, key C, tenor range)', () => {
-    expect(lick.fragmentIds).toEqual(['m7-proto-54', 'dom7-orig-15', 'maj7-orig-23']);
+  it('snapshot of the current generator (seed 3, tier 3, key C, tenor range, legacy pool)', () => {
+    expect(lick.fragmentIds).toEqual(['m7-orig-16', 'dom7-proto-52', 'maj7-orig-21']);
     expect(lick.cellStarts).toEqual([0, 48, 96]);
-    expect(lick.difficulty.score).toBe(35.7);
-    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[57, 0, 6], [60, 6, 6], [62, 12, 6], [64, 18, 6]]);
-    expect(lick.notes.length).toBe(26);
+    expect(lick.difficulty.score).toBe(27.4);
+    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[null, 0, 6], [65, 6, 6], [69, 12, 6], [72, 18, 6]]);
+    expect(lick.notes.length).toBe(23);
   });
-  it('exports byte-identical MIDI (sha1 of files dumped before the migration)', () => {
+  it('exports stable MIDI (sha1 snapshot of the current generator and exporter)', () => {
     const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, range, seed: 3, fragments: LEGACY_POOL });
-    expect(l.difficulty.score).toBe(45.9);
+    expect(l.difficulty.score).toBe(41);
     const sha = (swing: boolean, comping: boolean) =>
       createHash('sha1').update(lickToMidi(l, { bpm: 120, swing, comping, comp: 'rootless' })).digest('hex');
-    expect(sha(false, false)).toBe('c49b5b9aec835eef2f8d60e7bcafc3af6cb91ccd');
-    expect(sha(false, true)).toBe('0e735602daf49f9f6a992d321eac2940feb31407');
-    expect(sha(true, false)).toBe('88ded1c8332b43f1b5c0508bbeb058ade87164f9');
-    expect(sha(true, true)).toBe('50b085c3ee2dadf20cbd3352caab2448bd7477d2');
+    expect(sha(false, false)).toBe('821fb8e3ce6eb7c5ed756b12819ce92b8f11dd52');
+    expect(sha(false, true)).toBe('0f710a9cf7443568eaef7a9b21cc1a15846137c8');
+    expect(sha(true, false)).toBe('b078c2873d40efe7d8c1bd7108c683432b1a0fa9');
+    expect(sha(true, true)).toBe('edddeb222e75d31e3db8198b14d18b028d2f371b');
   });
 });

@@ -9,7 +9,8 @@ export interface PlayOptions {
   bpm: number; swing: boolean; straight16: boolean; loop: boolean; metronome: boolean; countIn: boolean;
   piano: boolean; comp: CompStyle; leadVolume: number; pianoVolume: number; timbre: Timbre;
 }
-export interface PlayCallbacks { onNote?(indices: number[]): void; onStatus?(text: string): void; onEnd?(): void }
+/** onNote: `indices` = every note of the sounding tie chain (to highlight); `current` = the note that just started. */
+export interface PlayCallbacks { onNote?(indices: number[], current?: number): void; onStatus?(text: string): void; onEnd?(): void }
 
 interface Buses { lead: GainNode; piano: GainNode; met: GainNode }
 interface Queued { t: number; fn: () => void }
@@ -85,7 +86,7 @@ export class Player {
       this.later(st, () => cb.onStatus?.(`${bpm} BPM`));
       lick.notes.forEach((n, i) => {
         const idx = n.midi == null ? [] : byFirst.get(i) ?? [i];
-        this.later(st + tl(n.start) * spb, () => cb.onNote?.(idx));
+        this.later(st + tl(n.start) * spb, () => cb.onNote?.(idx, i));
       });
       for (const s of sounds) {
         const t = st + tl(s.start) * spb;

@@ -1,13 +1,13 @@
 import type { ChordQualityId, Fragment, LengthId, Lick, LickChord, LickNote, Tier } from '../types';
 import { RENDERABLE_DURS, TPB } from '../types';
 import { FRAGMENTS } from '../fragments';
-import { CHORDS } from '../theory/chords';
+import { CHORDS, inScale } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 import { findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm';
 import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
 import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, scoreToPos, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
-import { type Ev, eventsToNotes, fixJoins, leapPenalty } from './connect';
+import { type Ev, chordIndexAt, eventsToNotes, evDur, fixJoins, fixLeaps, leapPenalty, phraseEvents } from './connect';
 
 export interface GenerateOptions {
   progressionId: string;
@@ -21,6 +21,16 @@ export interface GenerateOptions {
   targetScore?: number;
   /** CONCERT comfortable range (use concertRange(inst)). */
   range: [number, number];
+  /**
+   * Optional CONCERT tessitura the licks should prefer (e.g. rangeForLevel(inst, tier) shifted to concert pitch).
+   * `range` stays the hard limit; the comfort range steers octave choice and candidate ranking. Clamped to `range`.
+   */
+  comfortRange?: [number, number];
+  /**
+   * Fragment ids heard recently (e.g. in the last few licks of a practice session). They are strongly down-weighted so
+   * consecutive licks don't keep reusing the same figure. Optional; doesn't change output when empty.
+   */
+  avoid?: readonly string[];
   /** default: random */
   seed?: number;
   /** default: FRAGMENTS */
@@ -82,10 +92,15 @@ interface Pools {
   get(q: ChordQualityId, beats: 2 | 4, ending: boolean): Fragment[];
 }
 
+/** Pools are built once per fragment list (the library is large; validating it on every lick was the main cost). */
+const poolCache = new WeakMap<readonly Fragment[], Pools>();
+
 function makePools(frags: Fragment[]): Pools {
+  const hit = poolCache.get(frags);
+  if (hit) return hit;
   const valid = frags.filter(isValidFragment);
   const cache = new Map<string, Fragment[]>();
-  return {
+  const pools: Pools = {
     get(q, beats, ending) {
       const key = `${q}|${beats}|${ending ? 1 : 0}`;
       let v = cache.get(key);
@@ -97,6 +112,8 @@ function makePools(frags: Fragment[]): Pools {
       return v;
     },
   };
+  poolCache.set(frags, pools);
+  return pools;
 }
 
 /* ------------------------------ planning ------------------------------ */
@@ -109,6 +126,27 @@ interface PlanItem {
 }
 
 const LEVEL_WEIGHT = [1, 0.3, 0.06, 0.02];
+
+/**
+ * At most this share of a lick's attacks may be 16th notes (Expert is reached by language, not by speed alone).
+ * Cells are chosen against a running count, so a lick can still use a few fast cells but never a wall of 16ths.
+ */
+const MAX_SIXTEENTH_SHARE = 0.3;
+const sixteenthCache = new WeakMap<Fragment, { n16: number; n: number }>();
+/** Count of 16th-note attacks (triplets excluded) and of all attacks in a fragment. */
+function sixteenthCount(f: Fragment): { n16: number; n: number } {
+  let v = sixteenthCache.get(f);
+  if (!v) {
+    v = { n16: 0, n: 0 };
+    f.notes.forEach((n, i) => {
+      if (n.rel == null || (i > 0 && f.notes[i - 1].tie && f.notes[i - 1].rel === n.rel)) return;
+      v!.n++;
+      if (n.dur <= 3 && n.dur % 3 === 0) v!.n16++;
+    });
+    sixteenthCache.set(f, v);
+  }
+  return v;
+}
 
 /**
  * Triplet fragments are a flavour, not the default texture. Their weight is scaled per requested tier:
@@ -172,6 +210,18 @@ function partitionSlot(rng: Rng, slotBeats: number, startBeat: number, endingPie
   return out;
 }
 
+/** Pitch content (rel pitches) and melodic shape (intervals) of a fragment, to spot loops across different ids. */
+const fragSigs = new WeakMap<Fragment, { rels: string; shape: string }>();
+function fragSig(f: Fragment): { rels: string; shape: string } {
+  let s = fragSigs.get(f);
+  if (!s) {
+    const rels = f.notes.filter(n => n.rel != null).map(n => n.rel as number);
+    s = { rels: rels.map(r => mod12(r)).join(','), shape: rels.slice(1).map((r, i) => r - rels[i]).join(',') };
+    fragSigs.set(f, s);
+  }
+  return s;
+}
+
 function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
   const first = f.notes[0];
   if (first.rel == null) return true;
@@ -181,9 +231,13 @@ function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
 
 function buildPlan(
   rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number, tier: Tier,
+  avoid?: ReadonlySet<string>,
 ): PlanItem[] {
   const plan: PlanItem[] = [];
   let beat = 0;
+  let seqCells = 0;
+  let n16 = 0;
+  let nAll = 0;
   chords.forEach((chord, ci) => {
     const isLastSlot = ci === chords.length - 1;
     const q = chord.quality;
@@ -195,17 +249,27 @@ function buildPlan(
     const parts = partitionSlot(rng, slotBeats[ci], beat, endingPiece);
     let tick = chord.start;
     let prevId = '';
+    let prevSig: { rels: string; shape: string } | null = null;
     parts.forEach((b, pi) => {
       const ending = isLastSlot && pi === parts.length - 1;
       const pool = pools.get(q, b as 2 | 4, ending);
       const frag = rng.weighted(pool, f => {
         let w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
         w *= tripletFactor(f, level, tier);
-        if (f.id === prevId) w *= 0.15;
+        if (f.id === prevId) w *= 0.05;
+        if (avoid?.has(f.id)) w *= 0.05;
+        else if (prevSig && (fragSig(f).rels === prevSig.rels || fragSig(f).shape === prevSig.shape)) w *= 0.12;
         if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
+        if (seqCells > 0 && f.tags.includes('sequence')) w *= 0.002; // one sequence per lick
+        const c = sixteenthCount(f);
+        if (c.n16 >= 3 && (n16 + c.n16) / (nAll + c.n) > MAX_SIXTEENTH_SHARE) w *= 0.02;
         return w;
       });
+      if (frag.tags.includes('sequence')) seqCells++;
+      n16 += sixteenthCount(frag).n16;
+      nAll += sixteenthCount(frag).n;
       prevId = frag.id;
+      prevSig = fragSig(frag);
       plan.push({ frag, chordIdx: ci, start: tick });
       tick += b * TPB;
       beat += b;
@@ -340,6 +404,57 @@ function lickCost(events: Ev[], fragStarts: number[], range: [number, number], f
   return cost;
 }
 
+/**
+ * Landing penalty by the note's degree (semitones above the chord root), in "score points" so it can be added to the
+ * candidate's distance from the target. Dominants must land on the 3rd or 7th; the tonic's best landings are the 3rd,
+ * 7th/6th, then 9th and 5th (root weakest); other chords prefer a guide tone too.
+ */
+function landingPenalty(q: ChordQualityId, rel: number, last: boolean): number {
+  const c = CHORDS[q];
+  if (c.guide.some(g => mod12(g) === rel)) return 0;
+  if (q === 'dom7' || q === 'dom7alt') return rel === 0 ? 3 : 2.5;
+  if (last) {
+    if (rel === 2 || rel === 7) return 0.15;
+    if (rel === 0) return 1.8;
+    return 0.6;
+  }
+  return rel === 0 ? 0.4 : 0.2;
+}
+
+/**
+ * Preference terms (score points) used to rank candidates besides difficulty: guide-tone arrivals at chord changes,
+ * no long non-scale note on a beat, and staying inside the comfortable tessitura.
+ */
+function preference(events: Ev[], chords: LickChord[], comfort: [number, number], lydian: boolean[]): number {
+  let pen = 0;
+  chords.forEach((ch, ci) => {
+    const e = events.find(x => x.start <= ch.start && x.start + evDur(x) > ch.start);
+    if (!e || e.midi == null) return;
+    pen += landingPenalty(ch.quality, mod12(e.midi - ch.rootPc), ci === chords.length - 1);
+  });
+  let out = 0;
+  const altSeen = chords.map(() => false);
+  let prevMidi: number | null = null;
+  for (const e of events) {
+    if (e.midi == null) continue;
+    out += Math.max(0, comfort[0] - e.midi, e.midi - comfort[1]);
+    if (prevMidi != null && Math.abs(e.midi - prevMidi) >= 10) pen += 14; // a leap of a minor 7th or more
+    prevMidi = e.midi;
+    // an anticipation head (attacked within a beat before a change and tied over it) is judged on the arrival chord
+    let ci = chordIndexAt(chords, e.start);
+    const next = chords[ci + 1];
+    if (next && e.start + evDur(e) > next.start && next.start - e.start < TPB) ci++;
+    const ch = chords[ci];
+    const rel = mod12(e.midi - ch.rootPc);
+    const stressed = e.start % TPB === 0 || evDur(e) >= TPB;
+    if (e.start % TPB === 0 && evDur(e) >= TPB && !inScale(e.midi, ch.rootPc, ch.quality)) pen += 1.5;
+    if (stressed && rel === 5 && (ch.quality === 'maj7' || (ch.quality === 'dom7' && lydian[ci]))) pen += 10; // avoid note
+    if (ch.quality === 'dom7alt' && (rel === 1 || rel === 3 || rel === 8)) altSeen[ci] = true;
+  }
+  chords.forEach((ch, ci) => { if (ch.quality === 'dom7alt' && !altSeen[ci]) pen += 6; }); // 7alt must sound altered
+  return pen + Math.min(out, 40) * 0.12;
+}
+
 const makeId = (progressionId: string, length: LengthId, keyPc: number, tier: Tier, seed: number) =>
   `${progressionId}-${length}-k${keyPc}-t${tier}-${seed}`;
 
@@ -368,10 +483,17 @@ export function generateLick(opts: GenerateOptions): Lick {
   const chords = expandProgression(def, opts.length, keyPc);
   const slotBeats = LENGTHS[opts.length].beats;
   const totalTicks = chords.reduce((a, c) => a + c.dur, 0);
+  const comfort: [number, number] = opts.comfortRange
+    ? [Math.max(opts.range[0], opts.comfortRange[0]), Math.min(opts.range[1], opts.comfortRange[1])]
+    : opts.range;
+  const fitRange = comfort[1] - comfort[0] >= 14 ? comfort : opts.range;
   const pools = makePools(opts.fragments ?? FRAGMENTS);
+  const avoidSet = opts.avoid?.length ? new Set(opts.avoid) : undefined;
   const rng = new Rng(seed);
+  // Lydian-dominant chords (tritone-sub bII7, backdoor bVII7): the natural 11 is an avoid note there
+  const lydian = def.slots.map(sl => sl.roman === '♭II7' || sl.roman === '♭VII7');
 
-  let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number } | null = null;
+  let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number; pref: number } | null = null;
   // Without a target the level is the tier (integer, exactly the original weighting). With a target it starts at
   // the target's fractional level and is nudged each round toward where the candidates actually scored.
   let level = target !== undefined ? levelForTarget(target) : reqTier;
@@ -379,21 +501,26 @@ export function generateLick(opts: GenerateOptions): Lick {
     const sharp = 1 + round * 0.8;
     const roundScores: number[] = [];
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier);
-      const octaves = chooseOctaves(plan, chords, opts.range);
+      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier, avoidSet);
+      const octaves = chooseOctaves(plan, chords, fitRange);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
-      const fixes = fixJoins(events, chords, opts.range);
+      const fixes = fixJoins(events, chords, opts.range) + fixLeaps(events, opts.range);
+      phraseEvents(rng, events, fragStarts, chords, opts.range, { level });
       const notes = eventsToNotes(events, chords);
       const cost = lickCost(events, fragStarts, opts.range, fixes);
       const score = scoreLick(notes, chords, def).score;
+      let pref = preference(events, chords, fitRange, lydian);
+      let outside = 0;
+      for (const n of notes) if (n.midi != null) outside += Math.max(0, opts.range[0] - n.midi, n.midi - opts.range[1]);
+      pref += outside * 60; // the hard range outranks everything
       roundScores.push(score);
       // With a target, staying inside the target's tier outranks closeness (a target on a boundary must not land across it).
       const dist = target !== undefined
-        ? (tierDistance(score, reqTier) > 0 ? 1000 : 0) + Math.abs(score - target)
-        : tierDistance(score, reqTier);
-      if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist };
+        ? (tierDistance(score, reqTier) > 0 ? 1000 : 0) + Math.abs(score - target) + pref
+        : (tierDistance(score, reqTier) > 0 ? 1000 + tierDistance(score, reqTier) : 0) + pref;
+      if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist, pref };
     }
-    if (best && best.dist <= tol) break;
+    if (best && best.dist - best.pref <= tol) break;
     if (target !== undefined) {
       const mid = [...roundScores].sort((a, b) => a - b)[roundScores.length >> 1];
       if (mid > target + tol) level = Math.max(1, level - 0.4);
@@ -401,6 +528,7 @@ export function generateLick(opts: GenerateOptions): Lick {
     }
   }
   const b = best!;
+  const finalNotes = foldIntoRange(b.notes, opts.range); // guarantee: never a note outside the instrument range
   // Sanity: contiguity (guards against malformed custom fragments; never expected to trigger)
   const end = b.notes.reduce((m, n) => Math.max(m, n.start + n.dur), 0);
   if (end !== totalTicks) throw new Error(`generator produced ${end} ticks, expected ${totalTicks}`);
@@ -416,37 +544,44 @@ export function generateLick(opts: GenerateOptions): Lick {
     requestedTier: reqTier,
     ...(target !== undefined ? { targetScore: target } : {}),
     chords,
-    notes: b.notes,
+    notes: finalNotes,
     totalTicks,
     fragmentIds: b.plan.map(p => p.frag.id),
     cellStarts: b.plan.map(p => p.start),
-    difficulty: scoreLick(b.notes, chords, def),
+    difficulty: scoreLick(finalNotes, chords, def),
     createdAt: Date.now(),
   };
 }
 
 /**
  * Shift a lick to a new tonic; respell chords; re-fit the octave to `range`, then fold any notes still outside it
- * (see foldIntoRange). Rhythm and pitch classes never change; intervals and difficulty change only if folding was needed.
+ * (see foldIntoRange). `comfortRange` (optional, clamped to `range`) steers the octave choice toward the written comfortable
+ * tessitura; `range` stays the hard limit. Rhythm and pitch classes never change; intervals and difficulty change only if folding was needed.
  */
-export function transposeLick(lick: Lick, keyPc: number, range: [number, number]): Lick {
+export function transposeLick(lick: Lick, keyPc: number, range: [number, number], comfortRange?: [number, number]): Lick {
   const def = getProgression(lick.progressionId);
   const newKey = mod12(keyPc);
   const delta = mod12(newKey - lick.keyPc);
   const pitches = lick.notes.filter(n => n.midi != null).map(n => n.midi as number);
-  const centre = range[0] + 0.4 * (range[1] - range[0]);
+  const comfort: [number, number] = comfortRange
+    ? [Math.max(range[0], comfortRange[0]), Math.min(range[1], comfortRange[1])]
+    : range;
+  const fit = comfort[1] - comfort[0] >= 14 ? comfort : range;
+  const centre = fit[0] + 0.4 * (fit[1] - fit[0]);
   let bestShift = delta;
   let bestCost = Infinity;
   for (let m = -4; m <= 4; m++) {
     const s = delta + 12 * m;
     let viol = 0;
+    let cviol = 0;
     let sum = 0;
     for (const p of pitches) {
       const q = p + s;
       viol += Math.max(0, range[0] - q, q - range[1]);
+      cviol += Math.max(0, fit[0] - q, q - fit[1]);
       sum += q;
     }
-    const cost = viol * 40 + (pitches.length ? Math.abs(sum / pitches.length - centre) : 0);
+    const cost = viol * 40 + cviol * 2 + (pitches.length ? Math.abs(sum / pitches.length - centre) : 0);
     if (cost < bestCost) {
       bestCost = cost;
       bestShift = s;
@@ -454,7 +589,7 @@ export function transposeLick(lick: Lick, keyPc: number, range: [number, number]
   }
   const chords = expandProgression(def, lick.length, newKey);
   const shifted: LickNote[] = lick.notes.map(n => ({ ...n, midi: n.midi == null ? null : n.midi + bestShift }));
-  const notes = foldIntoRange(shifted, range);
+  const notes = foldIntoRange(shifted, range, fit);
   const folded = notes.some((n, i) => n.midi !== shifted[i].midi);
   return {
     ...lick,
@@ -478,7 +613,7 @@ export function transposeLick(lick: Lick, keyPc: number, range: [number, number]
  * leap differs from the original leap, so a run of out-of-range notes between in-range neighbours moves as one
  * phrase rather than as scattered single-note jumps. Ties break toward the smaller displacement. Deterministic.
  */
-export function foldIntoRange(notes: LickNote[], range: [number, number]): LickNote[] {
+export function foldIntoRange(notes: LickNote[], range: [number, number], comfort: [number, number] = range): LickNote[] {
   const [lo, hi] = range;
   // units: pitched notes joined by ties share one pitch
   const unitOf: number[] = new Array(notes.length).fill(-1);
@@ -505,7 +640,7 @@ export function foldIntoRange(notes: LickNote[], range: [number, number]): LickN
   const n = orig.length;
   const cost: number[][] = [];
   const back: number[][] = [];
-  cost[0] = cands[0].map(q => Math.abs(q - orig[0]) * 0.01);
+  cost[0] = cands[0].map(q => Math.abs(q - orig[0]) * 0.01 + Math.max(0, comfort[0] - q, q - comfort[1]) * 0.3);
   back[0] = cands[0].map(() => -1);
   for (let i = 1; i < n; i++) {
     cost[i] = [];
@@ -518,7 +653,7 @@ export function foldIntoRange(notes: LickNote[], range: [number, number]): LickN
         const c = cost[i - 1][j] + Math.abs(q - p - oi);
         if (c < best) { best = c; bj = j; }
       });
-      cost[i].push(best + Math.abs(q - orig[i]) * 0.01);
+      cost[i].push(best + Math.abs(q - orig[i]) * 0.01 + Math.max(0, comfort[0] - q, q - comfort[1]) * 0.3);
       back[i].push(bj);
     });
   }

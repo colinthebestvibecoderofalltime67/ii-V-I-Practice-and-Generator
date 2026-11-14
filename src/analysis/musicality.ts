@@ -1,0 +1,196 @@
+/**
+ * Musicality metrics for generated licks (pure, no DOM). Used by `npm run musicality` and by tests, so phrasing
+ * and vocabulary changes are judged by numbers rather than taste. Each metric answers one question a jazz
+ * player would ask of a line; see docs/ARCHITECTURE.md.
+ */
+import type { Lick, LickNote } from '../types';
+import { TPB } from '../types';
+import { CHORDS, inScale } from '../theory/chords';
+import { mod12 } from '../theory/pitch';
+
+export interface Attack { idx: number; midi: number; start: number; dur: number; chord: number }
+
+/** Attacks with tie chains merged (start/chord of the first note, dur of the whole chain). */
+export function attacks(notes: readonly LickNote[]): Attack[] {
+  const out: Attack[] = [];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    if (n.midi == null) continue;
+    if (i > 0 && notes[i - 1].tie && notes[i - 1].midi === n.midi) { out[out.length - 1].dur += n.dur; continue; }
+    out.push({ idx: i, midi: n.midi, start: n.start, dur: n.dur, chord: n.chord });
+  }
+  return out;
+}
+
+export interface LickMetrics {
+  /** A note attacked within one beat before a chord change and still sounding across it. */
+  anticipations: number;
+  /** The lick starts with a rest (pickup feel). */
+  startsWithRest: boolean;
+  /** Re-attacks of the same pitch where one melodic cell joins the next. */
+  seamRepeats: number;
+  /** For each dominant chord: is the note sounding as it arrives its 3rd or 7th? (null = no note sounding) */
+  dominantArrivalGuide: (boolean | null)[];
+  /** Natural 5th or natural 13th attacked on a beat over a 7alt chord. */
+  altNaturalOnBeat: number;
+  /** Non-scale (chromatic) notes attacked on a beat and held a beat or longer. */
+  longChromaticOnBeat: number;
+  /** Highest pitch minus lowest, in semitones. */
+  span: number;
+  /** Consecutive attacks a minor 7th (10 semitones) or more apart. */
+  bigLeaps: number;
+  /** Attacks lasting a 16th or less (triplets excluded) and all attacks, for the 16th-note share. */
+  sixteenths: number;
+  attackCount: number;
+  /** For each 7alt chord: does any note over it carry an alteration (♭9, ♯9 or ♭13)? */
+  altColoured: boolean[];
+  /** The 4th over a maj7 chord attacked on a beat or held a beat or longer (an avoid note). */
+  maj7FourthStressed: number;
+  /** Beats rhythmed dotted 8th + 16th (march-like under swing). */
+  dottedPairs: number;
+  /** Natural 11 on a beat or held, over a tritone-sub or backdoor dominant (Lydian-dominant chords). */
+  lydianDomEleven: number;
+  /** The last attack repeats the pitch of the one before it. */
+  endingRepeat: boolean;
+}
+
+export function lickMetrics(lick: Lick): LickMetrics {
+  const att = attacks(lick.notes);
+  const chords = lick.chords;
+  let anticipations = 0;
+  for (let c = 1; c < chords.length; c++) {
+    const t = chords[c].start;
+    if (att.some(a => a.start < t && a.start >= t - TPB && a.start + a.dur > t)) anticipations++;
+  }
+  const startsWithRest = lick.notes.length > 0 && lick.notes[0].midi == null;
+
+  let seamRepeats = 0;
+  for (const cs of lick.cellStarts ?? []) {
+    if (cs === 0) continue;
+    const k = att.findIndex(a => a.start >= cs);
+    if (k > 0 && att[k].start === cs && att[k].midi === att[k - 1].midi && att[k - 1].start + att[k - 1].dur === cs) seamRepeats++;
+  }
+
+  const dominantArrivalGuide = chords.map(ch => {
+    if (ch.quality !== 'dom7' && ch.quality !== 'dom7alt') return undefined;
+    const a = att.find(x => x.start <= ch.start && x.start + x.dur > ch.start);
+    if (!a) return null;
+    const rel = mod12(a.midi - ch.rootPc);
+    return CHORDS[ch.quality].guide.some(g => mod12(g) === rel);
+  }).filter((v): v is boolean | null => v !== undefined);
+
+  let altNaturalOnBeat = 0;
+  let longChromaticOnBeat = 0;
+  for (const a of att) {
+    const ch = chords[a.chord];
+    const rel = mod12(a.midi - ch.rootPc);
+    const onBeat = a.start % TPB === 0;
+    if (onBeat && ch.quality === 'dom7alt' && (rel === 7 || rel === 9)) altNaturalOnBeat++;
+    if (onBeat && a.dur >= TPB && !inScale(a.midi, ch.rootPc, ch.quality)) longChromaticOnBeat++;
+  }
+  const ps = att.map(a => a.midi);
+  const span = ps.length ? Math.max(...ps) - Math.min(...ps) : 0;
+
+  let bigLeaps = 0;
+  for (let i = 1; i < att.length; i++) if (Math.abs(att[i].midi - att[i - 1].midi) >= 10) bigLeaps++;
+  const sixteenths = att.filter(a => a.dur <= 3 && a.dur % 3 === 0).length;
+  const altColoured = chords.flatMap((ch, ci) => ch.quality !== 'dom7alt' ? [] :
+    [att.some(a => a.chord === ci && [1, 3, 8].includes(mod12(a.midi - ch.rootPc)))]);
+  let maj7FourthStressed = 0;
+  let lydianDomEleven = 0;
+  const lydianDom = lick.progressionId === 'tritone-251' || lick.progressionId === 'backdoor-251';
+  for (const a of att) {
+    const ch = chords[a.chord];
+    const rel = mod12(a.midi - ch.rootPc);
+    const stressed = a.start % TPB === 0 || a.dur >= TPB;
+    if (stressed && ch.quality === 'maj7' && rel === 5) maj7FourthStressed++;
+    if (stressed && lydianDom && ch.quality === 'dom7' && rel === 5) lydianDomEleven++;
+  }
+  let dottedPairs = 0;
+  const notes = lick.notes;
+  for (let i = 0; i + 1 < notes.length; i++) {
+    if (notes[i].start % TPB === 0 && notes[i].dur === 9 && notes[i + 1].dur === 3) dottedPairs++;
+  }
+  const endingRepeat = att.length > 1 && att[att.length - 1].midi === att[att.length - 2].midi;
+  return {
+    anticipations, startsWithRest, seamRepeats, dominantArrivalGuide, altNaturalOnBeat, longChromaticOnBeat, span,
+    bigLeaps, sixteenths, attackCount: att.length, altColoured, maj7FourthStressed, dottedPairs, lydianDomEleven, endingRepeat,
+  };
+}
+
+export interface MusicalitySummary {
+  licks: number;
+  /** Share of licks with at least one anticipation. */
+  anticipationShare: number;
+  startsWithRestShare: number;
+  /** Share of licks with at least one seam re-attack. */
+  seamRepeatShare: number;
+  /** Share of dominant arrivals landing on the 3rd or 7th (arrivals with no sounding note excluded). */
+  dominantGuideShare: number;
+  /** Natural 5/13 on-beat attacks over 7alt per 1,000 attacks. */
+  altNaturalPerK: number;
+  longChromaticPerK: number;
+  /** Share of licks containing the most-used fragment, and its id. */
+  topCellShare: number;
+  topCell: string;
+  /** Share of licks with a leap of a minor 7th or more between consecutive notes. */
+  bigLeapShare: number;
+  /** Share of all attacks that are 16th notes (triplets excluded). */
+  sixteenthShare: number;
+  /** Share of 7alt chords with no ♭9, ♯9 or ♭13 in the line over them. */
+  altPlainShare: number;
+  /** Share of licks stressing the 4th over a maj7 chord. */
+  maj7FourthShare: number;
+  /** Share of licks with two or more dotted-8th-and-16th beats. */
+  dottedShare: number;
+  /** Share of tritone-sub/backdoor licks stressing the natural 11 over the Lydian-dominant chord. */
+  lydianElevenShare: number;
+  /** Share of licks whose last note repeats the note before it. */
+  endingRepeatShare: number;
+}
+
+export function summarize(licks: readonly Lick[]): MusicalitySummary {
+  let ant = 0, rest = 0, seam = 0, guideHit = 0, guideN = 0, altNat = 0, longChr = 0, nAtt = 0;
+  let leap = 0, six = 0, altN = 0, altPlain = 0, fourth = 0, dotted = 0, lyd = 0, lydN = 0, endRep = 0;
+  const cellUse = new Map<string, number>();
+  for (const l of licks) {
+    const m = lickMetrics(l);
+    if (m.anticipations > 0) ant++;
+    if (m.startsWithRest) rest++;
+    if (m.seamRepeats > 0) seam++;
+    for (const g of m.dominantArrivalGuide) if (g !== null) { guideN++; if (g) guideHit++; }
+    altNat += m.altNaturalOnBeat;
+    longChr += m.longChromaticOnBeat;
+    nAtt += m.attackCount;
+    if (m.bigLeaps > 0) leap++;
+    six += m.sixteenths;
+    for (const c of m.altColoured) { altN++; if (!c) altPlain++; }
+    if (m.maj7FourthStressed > 0) fourth++;
+    if (m.dottedPairs >= 2) dotted++;
+    if (l.progressionId === 'tritone-251' || l.progressionId === 'backdoor-251') { lydN++; if (m.lydianDomEleven > 0) lyd++; }
+    if (m.endingRepeat) endRep++;
+    for (const id of new Set(l.fragmentIds)) cellUse.set(id, (cellUse.get(id) ?? 0) + 1);
+  }
+  const n = Math.max(1, licks.length);
+  let topCell = '';
+  let top = 0;
+  for (const [id, c] of cellUse) if (c > top) { top = c; topCell = id; }
+  return {
+    licks: licks.length,
+    anticipationShare: ant / n,
+    startsWithRestShare: rest / n,
+    seamRepeatShare: seam / n,
+    dominantGuideShare: guideN ? guideHit / guideN : 0,
+    altNaturalPerK: (1000 * altNat) / Math.max(1, nAtt),
+    longChromaticPerK: (1000 * longChr) / Math.max(1, nAtt),
+    topCellShare: top / n,
+    topCell,
+    bigLeapShare: leap / n,
+    sixteenthShare: six / Math.max(1, nAtt),
+    altPlainShare: altN ? altPlain / altN : 0,
+    maj7FourthShare: fourth / n,
+    dottedShare: dotted / n,
+    lydianElevenShare: lydN ? lyd / lydN : 0,
+    endingRepeatShare: endRep / n,
+  };
+}

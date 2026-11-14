@@ -1,7 +1,7 @@
 import type { LickChord, LickNote } from '../types';
 import { TICKS_PER_16TH, TPB, TPBAR } from '../types';
 import { isTupletDur, splitDur } from '../theory/rhythm';
-import { CHORDS, inScale, isChordToneOrTension } from '../theory/chords';
+import { CHORDS, inScale, isChordTone, isChordToneOrTension } from '../theory/chords';
 import type { Rng } from './rng';
 import { mod12 } from '../theory/pitch';
 
@@ -118,6 +118,17 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     return -1;
   };
 
+  /** events[k] is a chord tone one step from the note just before it, which is outside the chord's scale (a chromatic or b9 note): a resolution to keep. */
+  const resolvesChromatic = (k: number): boolean => {
+    const m = soundingBefore(k);
+    if (m < 0 || events[m].start + evDur(events[m]) !== events[k].start) return false;
+    const a = events[m].midi as number;
+    const b = events[k].midi as number;
+    const ch = chords[chordIndexAt(chords, events[k].start)];
+    return Math.abs(a - b) <= 2 && chordIndexAt(chords, events[m].start) === chordIndexAt(chords, events[k].start)
+      && !inScale(a, ch.rootPc, ch.quality) && isChordTone(b, ch.rootPc, ch.quality);
+  };
+
   chords.forEach((c, ci) => {
     const i = events.findIndex(e => e.start === c.start);
     if (i < 0 || events[i].midi == null) return;
@@ -141,6 +152,7 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
 
     if (ci === 0 || prevPitch == null || prev < 0) return;
     if (Math.abs(target - prevPitch) <= 7) return;
+    if (resolvesChromatic(prev)) return; // the last note resolves a chromatic / b9 note by step: the cell's own resolution stays
 
     // Awkward leap: try a chromatic approach / enclosure over the last 1-2 notes.
     const j = prev;

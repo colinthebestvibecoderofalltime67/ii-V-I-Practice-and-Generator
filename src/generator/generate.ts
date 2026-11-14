@@ -8,7 +8,7 @@ import { expandProgression, getProgression, slotBeats } from '../theory/progress
 import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, scoreToPos, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
 import { type Ev, anticipationFitsOldChord, eventsToNotes, fixJoins, fixLeaps, leapPenalty, phraseEvents } from './connect';
-import { conceptAllowed, conceptHits } from '../theory/devices';
+import { conceptAllowed, conceptHits, guideRels, isThird } from '../theory/devices';
 
 export interface GenerateOptions {
   progressionId: string;
@@ -447,6 +447,12 @@ const STOP_TOL = 0.9;
 const STOP_TOL_ROUNDS = 2;
 /** From this round on a delivering candidate inside the target's tier ends the search wherever it sits (the target may simply be out of reach for the chosen cells). */
 const LATE_ROUND = 4;
+/** With a Focus, a search that has seen no delivering candidate by this round (0-based) gives up. */
+const NO_HIT_ROUNDS = 2;
+const FOCUS_POOL_MAX_SCALE = 6;
+const TAG_CONCEPTS: ReadonlySet<ConceptId> = new Set<ConceptId>(['enclosures', 'chromaticApproach', 'triadPairs', 'sixthDim', 'superimposition']);
+const CONCEPT_TAG: Partial<Record<ConceptId, string>> = { enclosures: 'enclosure', chromaticApproach: 'chromatic', triadPairs: 'triad-pair', sixthDim: 'sixth-dim', superimposition: 'superimposition' };
+const hasTagForConcept = (f: Fragment, c: ConceptId): boolean => hasTag(f, CONCEPT_TAG[c] as string);
 const GB = 4;
 const GBAD = 0.4;
 const hasTag = (f: Fragment, t: string): boolean => (f.tags as string[]).includes(t);
@@ -462,7 +468,7 @@ function conceptFactor(f: Fragment, c: CellInfo, q: ChordQualityId, concept: Con
       if (!ctx.arrives && !ctx.departs) return 1;
       // a guide-tone link needs the old chord's last note to be a guide tone within 2 semitones of one of the new chord's: arrival
       // cells are weighed against the pitch the previous cell really ended on, departure cells against the chord that follows
-      const guide = CHORDS[q].guide;
+      const guide = guideRels(q);
       const good = tier >= 2 ? 10 : GB;
       const bad = tier >= 2 ? 0.2 : GBAD;
       let x = 1;
@@ -479,8 +485,9 @@ function conceptFactor(f: Fragment, c: CellInfo, q: ChordQualityId, concept: Con
     case 'anticipateI': {
       if (!ctx.anticOld) return 1;
       const root = ctx.chord.rootPc;
-      const ok = CHORDS[q].tones.some(t => mod12(t) === c.firstRel) && anticipationFitsOldChord(60 + root + c.firstRel, ctx.anticOld, !!ctx.anticOldLydian);
-      return ok ? 6 : 0.3;
+      if (!CHORDS[q].tones.some(t => mod12(t) === c.firstRel) || !anticipationFitsOldChord(60 + root + c.firstRel, ctx.anticOld, !!ctx.anticOldLydian)) return 0.3;
+      // the I's 3rd / b3 and root sound anticipated; its 5th and 7th are mostly common tones of the V (a held note, and not labelled)
+      return c.firstRel === 0 || isThird(q, c.firstRel) ? 6 : 1.5;
     }
   }
 }
@@ -493,6 +500,7 @@ function baseWeights(
   const w = new Float64Array(n);
   const cum = new Float64Array(n);
   let total = 0;
+  let boosted = 0;
   for (let i = 0; i < n; i++) {
     const f = pd.frags[i];
     if (f.concept && f.concept !== concept) { w[i] = 0; cum[i] = total; continue; } // a Focus cell is offered only under its own Focus
@@ -507,10 +515,25 @@ function baseWeights(
     }
     if (first && !firstNoteOk(f, q)) x *= 0.2;
     if (first && (q === 'dom7' || q === 'dom7alt' || chainLanding) && !ci0.firstGuide(q) && f.notes[0].rel != null) x *= 0.3; // a dominant arrives on its 3rd or 7th (so does every interior chord of a long chain)
-    if (concept && ctx) x *= conceptFactor(f, ci0, q, concept, ctx, tier);
+    let boost = 1;
+    if (concept && ctx) { boost = conceptFactor(f, ci0, q, concept, ctx, tier); x *= boost; }
     w[i] = x;
     total += x;
     cum[i] = total;
+    if (boost > 1) boosted += x;
+  }
+  // A small pool of Focus cells (e.g. the 2-beat triad pairs for m7b5) must still be drawn about half the time, or a short lick
+  // never gets one: scale the boosted cells up to a share of ~55% of the pool's weight (at most x6). Tag concepts only.
+  if (concept && boosted > 0 && TAG_CONCEPTS.has(concept) && boosted < 1.2 * (total - boosted)) {
+    const k = Math.min(FOCUS_POOL_MAX_SCALE, (1.2 * (total - boosted)) / boosted);
+    if (k > 1.01) {
+      total = 0;
+      for (let i = 0; i < n; i++) {
+        if (w[i] > 0 && pd.frags[i].concept === concept && hasTagForConcept(pd.frags[i], concept)) w[i] *= k;
+        total += w[i];
+        cum[i] = total;
+      }
+    }
   }
   return { w, cum, total };
 }
@@ -543,6 +566,8 @@ interface PickState {
   hasPrev: boolean;
   pRels: number; pShape: number; pFirst3: number; pLast2: number;
   seqCells: number; dottedCells: number; n16: number; nAll: number;
+  /** Focus cells already in this lick (under a Focus): the same cell is not played twice. */
+  used: string[];
 }
 
 /**
@@ -564,6 +589,7 @@ function pickCell(rng: Rng, pd: PoolData, bw: BaseWeights, st: PickState, av: Av
   }
   if (st.seqCells > 0) touchAll(pd.seqList);
   if (st.dottedCells > 0) touchAll(pd.dottedList);
+  for (let j = 0; j < st.used.length; j++) touchAll(pd.byId.get(st.used[j]));
   const capList = pd.capList;
   for (let j = 0; j < capList.length; j++) {
     const i = capList[j];
@@ -588,6 +614,7 @@ function pickCell(rng: Rng, pd: PoolData, bw: BaseWeights, st: PickState, av: Av
     if (st.hasPrev && (pd.rels[i] === st.pRels || pd.shape[i] === st.pShape || pd.first3[i] === st.pFirst3 || pd.last2[i] === st.pLast2)) w *= 0.12;
     if (st.seqCells > 0 && pd.seq[i]) w *= 0.002; // one sequence per lick
     if (st.dottedCells > 0 && pd.dotted[i]) w *= 0.02; // one dotted-8th cell per lick
+    if (st.used.length && st.used.includes(pd.ids[i])) w *= 0.02; // a Focus cell is not repeated within a lick
     if (pd.n16[i] >= 3 && (st.n16 + pd.n16[i]) / (st.nAll + pd.nAttacks[i]) > cap) w *= 0.02;
     run += w - base;
     dcum[k] = run;
@@ -616,7 +643,7 @@ function buildPlan(
 ): PlanItem[] {
   const plan: PlanItem[] = [];
   let prevLastAbs: number | null = null; // pitch class the previous cell ended on (guide-tone steering)
-  const st: PickState = { prevId: '', hasPrev: false, pRels: 0, pShape: 0, pFirst3: 0, pLast2: 0, seqCells: 0, dottedCells: 0, n16: 0, nAll: 0 };
+  const st: PickState = { prevId: '', hasPrev: false, pRels: 0, pShape: 0, pFirst3: 0, pLast2: 0, seqCells: 0, dottedCells: 0, n16: 0, nAll: 0, used: [] };
   let beat = 0;
   chords.forEach((chord, ci) => {
     const isLastSlot = ci === chords.length - 1;
@@ -647,11 +674,11 @@ function buildPlan(
         const antic = concept === 'anticipateI' && isLastSlot && pi === 0 && ci > 0;
         ctx = { arrives, departs, chord, ...(antic ? { anticOld: chords[ci - 1], anticOldLydian: roles[ci - 1] === 'lyd' } : {}) };
         if (concept === 'guideTones' && (arrives || departs)) {
-          const guide = CHORDS[q].guide;
+          const guide = guideRels(q);
           if (arrives && prevLastAbs !== null) ctx.arrNear = guide.reduce((m, g, i) => (nearPc(prevLastAbs! - chord.rootPc, g) ? m | (1 << i) : m), 0);
           if (departs) {
             const nx = chords[ci + 1];
-            ctx.depNear = guide.reduce((m, g, i) => (CHORDS[nx.quality].guide.some(h => nearPc(g, nx.rootPc + h - chord.rootPc)) ? m | (1 << i) : m), 0);
+            ctx.depNear = guide.reduce((m, g, i) => (guideRels(nx.quality).some(h => nearPc(g, nx.rootPc + h - chord.rootPc)) ? m | (1 << i) : m), 0);
           }
           slot = ctxSlot(`g${slot}|${ctx.arrNear ?? 'x'}|${ctx.depNear ?? 'x'}`);
         }
@@ -675,6 +702,7 @@ function buildPlan(
       if (pd.dotted[idx]) st.dottedCells++;
       st.n16 += pd.n16[idx];
       st.nAll += pd.nAttacks[idx];
+      if (frag.concept) st.used.push(frag.id);
       st.prevId = pd.ids[idx];
       st.hasPrev = true;
       prevLastAbs = mod12(chord.rootPc + pd.info[idx].lastRel);
@@ -980,7 +1008,7 @@ let durScratch = new Int32Array(256);
 let flagScratch = new Int32Array(64);
 
 /** Ranking penalty (score points) for a candidate that misses the Focus concept: per chord change for guide tones, once for the rest. */
-const CONCEPT_MISS = 7;
+const CONCEPT_MISS_BY_TIER: readonly number[] = [10, 10, 16, 14];
 /** Guide tones at Advanced / Expert: every change that is not linked costs more, so the search favours the fully linked candidates. */
 const CONCEPT_MISS_GT_HIGH = 11;
 function conceptPenalty(notes: LickNote[], chords: LickChord[], concept: ConceptId, tier: Tier): { pen: number; hit: boolean } {
@@ -988,7 +1016,7 @@ function conceptPenalty(notes: LickNote[], chords: LickChord[], concept: Concept
   const miss = of - hits;
   // a long chain of changes may leave one link open (a lick must still sit on the slider's target)
   const hit = miss <= (concept === 'guideTones' ? Math.floor(of / 6) : 0);
-  return { pen: (concept === 'guideTones' && tier >= 3 ? CONCEPT_MISS_GT_HIGH : CONCEPT_MISS) * miss, hit };
+  return { pen: (concept === 'guideTones' && tier >= 3 ? CONCEPT_MISS_GT_HIGH : CONCEPT_MISS_BY_TIER[tier - 1]) * miss, hit };
 }
 
 const makeId = (progressionId: string, length: LengthId, keyPc: number, tier: Tier, seed: number) =>
@@ -1041,6 +1069,8 @@ export function generateLick(opts: GenerateOptions): Lick {
   let roundCache: RoundCache | null = null;
   let cachedLevel = NaN;
   let cachedSharp = NaN;
+  let nHit = 0; // under a Focus: candidates that delivered the concept so far
+  const hitScores: number[] = []; // under a Focus: scores of the candidates that deliver the concept (all rounds)
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const sharp = 1 + Math.min(round, 2) * 0.8;
     const roundScores: number[] = [];
@@ -1061,7 +1091,9 @@ export function generateLick(opts: GenerateOptions): Lick {
       pref += outside * 60; // the hard range outranks everything
       const focus = concept ? conceptPenalty(notes, chords, concept, reqTier) : null;
       pref += focus ? focus.pen : 0;
+      if (focus?.hit) nHit++;
       roundScores.push(score);
+      if (focus?.hit) hitScores.push(score);
       // With a target, staying inside the target's tier outranks closeness (a target on a boundary must not land across it).
       const dist = target !== undefined
         ? (tierDistance(score, reqTier) > 0 ? 1000 : 0) + Math.abs(score - target) + pref
@@ -1069,11 +1101,15 @@ export function generateLick(opts: GenerateOptions): Lick {
       if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist, pref, hit: !focus || focus.hit };
     }
     if (best && best.dist - best.pref <= (concept ? (round < STOP_TOL_ROUNDS ? Math.min(tol, STOP_TOL) : round < LATE_ROUND ? tol : 999) : tol) && best.hit) break; // with a Focus, keep searching until a candidate delivers it (first rounds: as close to the target as it gets)
+    if (concept && round >= NO_HIT_ROUNDS && nHit === 0) break; // nothing in the pool delivers the concept here: do not search on (speed)
     if (target !== undefined) {
-      const mid = [...roundScores].sort((a, b) => a - b)[roundScores.length >> 1];
+      // under a Focus the delivering candidates are the ones that matter: when they overshoot, the level drops faster, so the cells around
+      // the Focus cell get cheaper and the score comes back to the target
+      const ref = concept && hitScores.length >= 2 ? hitScores.slice(-8) : roundScores;
+      const mid = [...ref].sort((a, b) => a - b)[ref.length >> 1];
       if (mid > target + tol) {
         // stop early only once the best candidate is inside the target tier (dist < 1000)
-        if (level <= 1 && round >= FLOOR_AFTER_ROUND && best && best.dist - best.pref < 1000) break;
+        if (level <= 1 && round >= FLOOR_AFTER_ROUND && best && best.dist - best.pref < 1000 && best.hit) break;
         level = Math.max(1, level - 0.4);
       }
       else if (mid < target - tol) level = Math.min(4, level + 0.4);

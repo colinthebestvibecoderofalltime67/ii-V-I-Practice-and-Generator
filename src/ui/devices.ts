@@ -1,7 +1,7 @@
-import type { ConceptId, Instrument, Lick, Tier } from '../types';
+import type { ConceptId, Instrument, LengthId, Lick, ProgressionDef, Tier } from '../types';
 import { TIER_NAMES, TPB } from '../types';
 import { analyzeLick, type LickAnalysis } from '../theory/analyze';
-import { CONCEPT_MIN_TIER, CONCEPT_NAME, DEVICE_LABEL, DEVICE_NAME, conceptAllowed, detectDevices, displayDevices, type DeviceSpan } from '../theory/devices';
+import { CONCEPT_MIN_TIER, CONCEPT_NAME, DEVICE_LABEL, DEVICE_NAME, conceptAllowed, conceptAvailable, detectDevices, displayDevices, type DeviceSpan } from '../theory/devices';
 import { barOf } from '../theory/rhythm';
 import { formatSpelling, spellLick } from '../theory/spell';
 import type { DeviceMark } from '../render/notation';
@@ -50,8 +50,22 @@ export function deviceRows(lick: Lick, inst: Instrument, analysis: LickAnalysis 
 
 const PLURAL: ConceptId[] = ['guideTones', 'enclosures', 'chromaticApproach', 'triadPairs'];
 
-/** The note shown under the Focus menu when the concept is not offered at the chosen difficulty (empty when it is). */
-export function focusHint(concept: ConceptId, tier: Tier): string {
-  if (conceptAllowed(concept, tier)) return '';
-  return `${CONCEPT_NAME[concept]} ${PLURAL.includes(concept) ? 'are' : 'is'} ${TIER_NAMES[CONCEPT_MIN_TIER[concept]]}+ material \u2014 this lick ignores the focus.`;
+/** The words for a progression length in a hint. */
+const LENGTH_WORD: Record<LengthId, string> = { short: 'short', standard: 'standard', long: 'long' };
+
+/**
+ * The note shown under the Focus menu when the concept is not offered at the chosen difficulty, or (given the progression and length)
+ * when the generator cannot deliver it there reliably (empty when it can). Not available -> say what to change instead of silently
+ * producing licks that miss the device.
+ */
+export function focusHint(concept: ConceptId, tier: Tier, prog?: Pick<ProgressionDef, 'id' | 'name'>, length?: LengthId, pos?: number): string {
+  if (!conceptAllowed(concept, tier)) {
+    return `${CONCEPT_NAME[concept]} ${PLURAL.includes(concept) ? 'are' : 'is'} ${TIER_NAMES[CONCEPT_MIN_TIER[concept]]}+ material \u2014 this lick ignores the focus.`;
+  }
+  if (!prog || !length || conceptAvailable(concept, prog.id, length, tier, pos)) return '';
+  const lens: LengthId[] = ['short', 'standard', 'long'];
+  const otherLen = lens.find(l => l !== length && conceptAvailable(concept, prog.id, l, tier));
+  const nextTier = ([1, 2, 3, 4] as Tier[]).find(t => t > tier && conceptAllowed(concept, t) && conceptAvailable(concept, prog.id, length, t));
+  const way = otherLen ? `a ${LENGTH_WORD[otherLen]} lick carries it` : nextTier ? `${TIER_NAMES[nextTier]} or above carries it` : 'pick another progression';
+  return `${CONCEPT_NAME[concept]} only sometimes fit ${prog.name} at ${TIER_NAMES[tier]} with a ${LENGTH_WORD[length]} lick \u2014 ${way}.`;
 }

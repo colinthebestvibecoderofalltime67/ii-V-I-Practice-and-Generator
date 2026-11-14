@@ -42,7 +42,14 @@ if (process.env.JSON) {
   for (const [name, m] of rows) {
     console.log(`${name.padEnd(12)} ${String(m.licks).padStart(6)} ${pct(m.anticipationShare)} ${pct(m.startsWithRestShare)} ${pct(m.seamRepeatShare)} ${pct(m.dominantGuideShare)}   ${num(m.altNaturalPerK)}    ${num(m.longChromaticPerK)}  ${pct(m.topCellShare)} ${m.topCell}`);
   }
+  console.log('\nTier          leap10  16ths  altPlain  maj7-4th  dotted  lyd-11  endRepeat');
+  for (const [name, m] of rows) {
+    console.log(`${name.padEnd(12)} ${pct(m.bigLeapShare)} ${pct(m.sixteenthShare)}   ${pct(m.altPlainShare)}    ${pct(m.maj7FourthShare)}  ${pct(m.dottedShare)} ${pct(m.lydianElevenShare)}    ${pct(m.endingRepeatShare)}`);
+  }
   console.log('\nantic = licks with an anticipation into a chord change; pickup = starts with a rest; seam = licks that');
   console.log('re-attack the same pitch where two cells join; V-guide = dominant arrivals on the 3rd or 7th;');
   console.log('alt5/13 = natural 5 or 13 on a beat over 7alt, per 1,000 attacks; longChr = chromatic notes held a beat on a beat.');
+  console.log('leap10 = licks with a leap of a minor 7th or more; 16ths = share of notes that are 16ths; altPlain = 7alt chords');
+  console.log('with no b9/#9/b13; maj7-4th = licks stressing the 4th over maj7; dotted = licks with 2+ dotted-8th+16th beats;');
+  console.log('lyd-11 = tritone/backdoor licks stressing the natural 11 on the dominant; endRepeat = last note repeats the one before.');
 }

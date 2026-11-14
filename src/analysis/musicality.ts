@@ -66,6 +66,9 @@ export interface LickMetrics {
   /** For each Lydian dominant (tritone-sub / backdoor V): #11 present and no natural 11 over it; and any b9/#9/b13 over it. */
   lydianSharp11: boolean[];
   lydianAltered: boolean[];
+  /** For each secondary dominant (VI7 -> ii): the line over it states the b9; and holds a natural 13 on a beat (it clashes with the ii's b3). */
+  secDomFlat9: boolean[];
+  secDomNat13Stressed: boolean[];
   /** Longest run of consecutive chord-tone-only attacks within an octave (arpeggio noodling when > 6). */
   noodleRun: number;
   /** Longest stepwise (<= 2 semitones) run of 16th notes starting in the final bar. */
@@ -158,6 +161,14 @@ export function lickMetrics(lick: Lick): LickMetrics {
     lydianSharp11.push(rels.includes(6) && !rels.includes(5));
     lydianAltered.push(rels.some(r => r === 1 || r === 3 || r === 8));
   });
+  const secDomFlat9: boolean[] = [];
+  const secDomNat13Stressed: boolean[] = [];
+  chords.forEach((ch, ci) => {
+    if (slots[ci]?.fn !== 'secondaryDom' || ch.quality !== 'dom7') return;
+    const mine = att.filter(a => a.chord === ci);
+    secDomFlat9.push(mine.some(a => mod12(a.midi - ch.rootPc) === 1));
+    secDomNat13Stressed.push(mine.some(a => mod12(a.midi - ch.rootPc) === 9 && (a.start % TPB === 0 || a.dur >= TPB)));
+  });
   let noodleRun = 0;
   let run: number[] = [];
   for (const a of att) {
@@ -214,7 +225,7 @@ export function lickMetrics(lick: Lick): LickMetrics {
   return {
     anticipations, startsWithRest, seamRepeats, dominantArrivalGuide, changeArrivalGuide, altNaturalOnBeat, longChromaticOnBeat, span,
     bigLeaps, sixteenths, attackCount: att.length, altColoured, maj7FourthStressed, dottedPairs, lydianDomEleven, endingRepeat,
-    lydianSharp11, lydianAltered, noodleRun, finalSixteenthRun, ending, anticipationClashes, altThin, m7b5Flat5, cellPairs, nearDuplicatePairs,
+    lydianSharp11, lydianAltered, secDomFlat9, secDomNat13Stressed, noodleRun, finalSixteenthRun, ending, anticipationClashes, altThin, m7b5Flat5, cellPairs, nearDuplicatePairs,
   };
 }
 
@@ -253,6 +264,9 @@ export interface MusicalitySummary {
   lydianSharp11Share: number;
   /** Share of those dominants carrying a b9, #9 or b13 (the wrong, altered colour). */
   lydianAlteredShare: number;
+  /** Share of secondary dominants (VI7 -> ii) with a b9, and with a stressed natural 13. */
+  secDomFlat9Share: number;
+  secDomNat13StressedShare: number;
   /** Share of licks with arpeggio noodling (more than six chord-tone attacks in a row within an octave). */
   noodleShare: number;
   /** Share of licks with a stepwise 16th run of more than four notes in the final bar. */
@@ -273,7 +287,7 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
   let ant = 0, rest = 0, seam = 0, guideHit = 0, guideN = 0, chgHit = 0, chgN = 0, altNat = 0, longChr = 0, nAtt = 0;
   let leap = 0, six = 0, altN = 0, altPlain = 0, fourth = 0, dotted = 0, lyd = 0, lydN = 0, endRep = 0;
   const cellUse = new Map<string, number>();
-  let lsN = 0, ls = 0, laN = 0, la = 0, nood = 0, f16 = 0, clash = 0, antN = 0, thinN = 0, thin = 0, flatN = 0, flat = 0, pairs = 0, dupPairs = 0;
+  let sdN = 0, sd9 = 0, sd13 = 0, lsN = 0, ls = 0, laN = 0, la = 0, nood = 0, f16 = 0, clash = 0, antN = 0, thinN = 0, thin = 0, flatN = 0, flat = 0, pairs = 0, dupPairs = 0;
   const endCount: Record<EndingDegree, number> = { R: 0, '3': 0, '5': 0, '7': 0, '9': 0, '6': 0, other: 0 };
   for (const l of licks) {
     const m = lickMetrics(l);
@@ -294,6 +308,7 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     if (m.endingRepeat) endRep++;
     for (const v of m.lydianSharp11) { lsN++; if (v) ls++; }
     for (const v of m.lydianAltered) { laN++; if (v) la++; }
+    for (let k = 0; k < m.secDomFlat9.length; k++) { sdN++; if (m.secDomFlat9[k]) sd9++; if (m.secDomNat13Stressed[k]) sd13++; }
     if (m.noodleRun > 6) nood++;
     if (m.finalSixteenthRun > 4) f16++;
     endCount[m.ending]++;
@@ -329,6 +344,8 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     endingRepeatShare: endRep / n,
     lydianSharp11Share: lsN ? ls / lsN : 0,
     lydianAlteredShare: laN ? la / laN : 0,
+    secDomFlat9Share: sdN ? sd9 / sdN : 0,
+    secDomNat13StressedShare: sdN ? sd13 / sdN : 0,
     noodleShare: nood / n,
     finalSixteenthRunShare: f16 / n,
     endingShares: Object.fromEntries(ENDING_DEGREES.map(d => [d, endCount[d] / n])) as Record<EndingDegree, number>,

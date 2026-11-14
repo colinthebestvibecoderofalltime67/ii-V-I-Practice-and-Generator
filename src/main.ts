@@ -5,7 +5,7 @@ import { barOf } from './theory/rhythm';
 import { LENGTHS, PROGRESSIONS, getProgression, lengthBars } from './theory/progressions';
 import { INSTRUMENTS, concertRange, concertRangeForLevel, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
-import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from './difficulty/score';
+import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore, tierHint } from './difficulty/score';
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
 import { renderLick, type NoteLabel } from './render/notation';
 import { CONCEPTS, CONCEPT_DESC, CONCEPT_NAME, CONCEPT_SHORT, isConceptId } from './theory/devices';
@@ -143,10 +143,9 @@ function syncControls(): void {
   $<HTMLSelectElement>('sel-key').value = String(settings.key);
   $('prog-desc').textContent = prog.description;
   const hint = $('tier-hint');
-  if (targetTier() < prog.minTier) {
-    hint.hidden = false;
-    hint.textContent = `${prog.name} is usually ${TIER_NAMES[prog.minTier]} material, so ${TIER_NAMES[targetTier()]} licks here will be very simple.`;
-  } else hint.hidden = true;
+  const hintText = tierHint(prog, targetTier());
+  hint.hidden = !hintText;
+  hint.textContent = hintText;
   $<HTMLSelectElement>('sel-focus').value = settings.focus;
   $('focus-desc').textContent = settings.focus === 'any' ? 'No particular device: a mix of the usual vocabulary.' : CONCEPT_DESC[settings.focus];
   const fh = settings.focus === 'any' ? '' : focusHint(settings.focus, targetTier());

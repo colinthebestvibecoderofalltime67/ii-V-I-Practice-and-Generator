@@ -1,7 +1,8 @@
 import type { ChordQualityId, Instrument, Lick } from '../types';
 import { CHORDS, inScale, isChordTone } from './chords';
 import { getProgression } from './progressions';
-import { FLAT_NAMES, SHARP_NAMES, chordRootName, keyUsesSharps, mod12 } from './pitch';
+import { mod12 } from './pitch';
+import { chordSymbolText, formatSpelling, spellChordRoot, spellScale } from './spell';
 
 /**
  * Analysis of a lick: scale-degree labels per note and the parent scale of each chord.
@@ -55,14 +56,6 @@ export function noteKind(midi: number, rootPc: number, quality: ChordQualityId):
 /** "Eb" -> "E♭", "F#" -> "F♯". */
 export const prettyNote = (s: string): string => s.replace(/^([A-G])b/, '$1♭').replace(/^([A-G])#/, '$1♯');
 
-/** Notes of the chord's parent scale from its root, spelled to match the chord symbol on the sheet. */
-function scaleNotes(rootPc: number, quality: ChordQualityId, writtenKey: number, mode: Lick['mode']): string[] {
-  const root = chordRootName(rootPc, writtenKey, mode);
-  const sharps = root.includes('#') ? true : root.includes('b') ? false : keyUsesSharps(writtenKey, mode);
-  const names = sharps ? SHARP_NAMES : FLAT_NAMES;
-  return CHORDS[quality].scale.map(s => prettyNote(s === 0 ? root : names[mod12(rootPc + s)]));
-}
-
 /**
  * Analyse a lick. `inst` decides the spelling: chord symbols on the sheet are written for the
  * instrument (transposed), so symbols and scale notes use the written pitch classes. Degree
@@ -72,12 +65,12 @@ export function analyzeLick(lick: Lick, inst: Instrument): LickAnalysis {
   const writtenKey = mod12(lick.keyPc + inst.transpose);
   const def = getProgression(lick.progressionId);
   const chords: ChordAnalysis[] = lick.chords.map((c, i) => {
-    const wRoot = mod12(c.rootPc + inst.transpose);
+    const root = spellChordRoot(mod12(c.rootPc + inst.transpose), c.quality, writtenKey, lick.mode);
     return {
-      symbol: prettyNote(chordRootName(wRoot, writtenKey, lick.mode)) + CHORDS[c.quality].suffix,
+      symbol: chordSymbolText(root, c.quality),
       roman: def.slots[i]?.roman ?? '',
       scaleName: SCALE_NAMES[c.quality],
-      scaleNotes: scaleNotes(wRoot, c.quality, writtenKey, lick.mode),
+      scaleNotes: spellScale(root, c.quality).map(n => formatSpelling(n)),
     };
   });
 

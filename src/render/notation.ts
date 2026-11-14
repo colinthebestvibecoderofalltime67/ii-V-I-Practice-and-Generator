@@ -5,8 +5,8 @@ import {
 import type { Instrument, Lick } from '../types';
 import { TPBAR } from '../types';
 import { barOf, findTupletGroups, isTupletDur, splitDur, tupletDisplayDur, type TupletKind } from '../theory/rhythm';
-import { CHORDS } from '../theory/chords';
-import { chordRootName, keySignatureName, keyUsesSharps, mod12, vexKey } from '../theory/pitch';
+import { keySignatureName, mod12 } from '../theory/pitch';
+import { chordSymbolText, formatSpelling, spellChordRoot, spellLick } from '../theory/spell';
 import { type FingeredNote, lickFingerings, pickFingering, roman } from './tab';
 
 export interface NoteLabel { text: string; color?: string }
@@ -151,13 +151,13 @@ export function buildPieces(lick: Lick, transpose: number, nBars: number): Piece
   return bars;
 }
 
-function makeNote(p: Piece, clef: 'treble' | 'bass', sharps: boolean): StaveNote {
+function makeNote(p: Piece, clef: 'treble' | 'bass', key: string): StaveNote {
   const [d, dots] = DUR_NAME[p.disp] ?? ['q', 0];
   let n: StaveNote;
   if (p.midi == null) {
     n = new StaveNote({ keys: [clef === 'bass' ? 'd/3' : 'b/4'], duration: d + 'd'.repeat(dots) + 'r', clef });
   } else {
-    n = new StaveNote({ keys: [vexKey(p.midi, sharps)], duration: d + 'd'.repeat(dots), clef, auto_stem: true });
+    n = new StaveNote({ keys: [key], duration: d + 'd'.repeat(dots), clef, auto_stem: true });
   }
   if (dots) Dot.buildAndAttach([n], { all: true });
   return n;
@@ -254,7 +254,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const activeBar = print ? -1 : opts.activeBar ?? -1;
   const clef = inst.clef;
   const writtenKey = mod12(lick.keyPc + inst.transpose);
-  const sharps = keyUsesSharps(writtenKey, lick.mode);
+  const spelled = spellLick(lick, inst);
   const keySig = keySignatureName(writtenKey, lick.mode);
   const nBars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
   const showTab = !!(opts.showTab && inst.tab);
@@ -304,7 +304,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const labels = opts.noteLabels ?? [];
   const hasLabels = labels.some(l => l && l.text);
   const bars: Bar[] = pieceBars.map((pcs, b) => {
-    const notes = pcs.map(p => makeNote(p, clef, sharps));
+    const notes = pcs.map(p => makeNote(p, clef, p.midi == null ? '' : formatSpelling(spelled[p.noteIdx]!, 'vex')));
     pcs.forEach((p, k) => {
       if (hl.has(p.noteIdx)) notes[k].setStyle({ fillStyle: HL, strokeStyle: HL });
     });
@@ -359,8 +359,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
 
   // chord labels
   const chordLabel = lick.chords.map(c => {
-    const root = chordRootName(mod12(c.rootPc + inst.transpose), writtenKey, lick.mode);
-    return root + CHORDS[c.quality].suffix;
+    return chordSymbolText(spellChordRoot(mod12(c.rootPc + inst.transpose), c.quality, writtenKey, lick.mode), c.quality);
   });
 
   // measure text

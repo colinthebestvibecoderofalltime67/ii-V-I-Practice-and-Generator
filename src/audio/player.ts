@@ -49,6 +49,12 @@ export function applyPassAction(cur: { lick: Lick; bpm: number }, action: PassAc
   };
 }
 
+/**
+ * How far ahead of a pass's end the NEXT pass is decided and scheduled (seconds). Background tabs clamp timers to
+ * ~1 s, so the lookahead must exceed that or the next pass's notes would be scheduled in the past and bunch up.
+ */
+export const PASS_LOOKAHEAD = 1.5;
+
 interface Buses { lead: GainNode; piano: GainNode; met: GainNode }
 interface Queued { t: number; fn: () => void }
 
@@ -150,8 +156,8 @@ export class Player {
         const d = timelineSpan(tl, e.tick, e.dur) * spb * 0.92;
         e.midi.forEach(m => bass(ctx, buses.piano, m, t, d, 0.3));
       }
-      // ask for / schedule the next pass (or the end) shortly before this one finishes
-      this.later(end - 0.5 * spb - 0.15, () => {
+      // ask for / schedule the next pass (or the end) PASS_LOOKAHEAD before this one finishes (onPass still runs first)
+      this.later(Math.max(st, end - PASS_LOOKAHEAD), () => {
         if (session !== this.session) return;
         const action = opts.loop ? cb.onPass?.(passIndex + 1) : undefined;
         if (session !== this.session) return; // the callback may have stopped playback

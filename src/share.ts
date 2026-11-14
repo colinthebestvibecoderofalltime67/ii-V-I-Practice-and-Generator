@@ -1,5 +1,5 @@
 import type { LengthId, Lick, LickNote, Tier } from './types';
-import { TPBAR } from './types';
+import { RENDERABLE_DURS, TPBAR, TRIPLET_DURS } from './types';
 import { LENGTHS, PROGRESSIONS, expandProgression, totalTicks } from './theory/progressions';
 import { findTupletGroups } from './theory/rhythm';
 import { scoreLick } from './difficulty/score';
@@ -10,7 +10,7 @@ import { scoreLick } from './difficulty/score';
  * working after the generator changes. Everything else (chords, mode, tick positions, chord index per note,
  * difficulty) is derived on decode. Cell/fragment ids are not stored (analysis and rendering work without them).
  *
- * Binary layout (version 1):
+ * Binary layout (versions 1 and 2; they differ only in the duration table, see DURS):
  *   byte 0   version (high 4 bits) | length index (2 bits) | requestedTier - 1 (2 bits)
  *   byte 1   progression index in PROGRESSIONS (high 4 bits, so the registry is append-only) | keyPc (low 4 bits)
  *   byte 2   targetScore: 0 = none, else round(score * 2) + 1
@@ -20,11 +20,19 @@ import { scoreLick } from './difficulty/score';
  *                                              pitch; the first pitch is relative to 60)
  * Pitches are CONCERT MIDI.
  */
-export const SHARE_VERSION = 1;
+export const SHARE_VERSION = 2;
 export const SHARE_PARAM = 'l';
 
-/** Every duration the generator can produce: triplet 16th/8th/quarter units, then the renderable values. */
-const DURS = [2, 3, 4, 6, 8, 9, 12, 18, 24, 36, 48];
+/**
+ * Duration tables by version. v1 had no 16 (a 2-unit quarter-triplet note, which the generator does produce). v2 only
+ * APPENDS to v1 so the codes of old links keep their meaning; links written as v1 still decode with the v1 table.
+ */
+const DURS_V1 = [2, 3, 4, 6, 8, 9, 12, 18, 24, 36, 48];
+const DURS_V2 = [...DURS_V1, 16];
+const DURS_BY_VERSION: Record<number, readonly number[]> = { 1: DURS_V1, 2: DURS_V2 };
+const DURS = DURS_V2;
+// Everything the generator can emit must be encodable: renderable values, triplet units and their 2-unit forms.
+if (![...RENDERABLE_DURS, ...TRIPLET_DURS, ...TRIPLET_DURS.map(d => 2 * d)].every(d => DURS.includes(d))) throw new Error('share: DURS table is missing a duration');
 const LENGTH_IDS = Object.keys(LENGTHS) as LengthId[];
 const MAX_NOTES = 400;
 const TIE = 0x10;
@@ -80,7 +88,8 @@ export function encodeLick(lick: Lick): string {
 export function decodeLick(code: string): Lick | null {
   const b = fromBase64Url(code);
   if (!b || b.length < 4 || b.length > 3 + 4 * MAX_NOTES) return null;
-  if (b[0] >> 4 !== SHARE_VERSION) return null;
+  const durs = DURS_BY_VERSION[b[0] >> 4];
+  if (!durs) return null;
   const length = LENGTH_IDS[(b[0] >> 2) & 3];
   const tier = ((b[0] & 3) + 1) as Tier;
   const def = PROGRESSIONS[b[1] >> 4];
@@ -101,7 +110,7 @@ export function decodeLick(code: string): Lick | null {
     if (i >= b.length || notes.length >= MAX_NOTES) return null;
     const h = b[i++];
     if (h & 0xc0) return null;
-    const dur = DURS[h & 15];
+    const dur = durs[h & 15];
     if (dur === undefined) return null;
     const tie = (h & TIE) !== 0;
     const rest = (h & REST) !== 0;

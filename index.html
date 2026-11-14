@@ -82,7 +82,8 @@
         <label class="check"><input type="checkbox" id="c-swing"> Swing</label>
         <label class="check" id="straight16-wrap"><input type="checkbox" id="c-straight16"> Straight 16ths</label>
         <label class="check"><input type="checkbox" id="c-piano"> Backing</label>
-        <label class="check"><input type="checkbox" id="c-loop"> Loop</label>
+        <label class="check" id="loop-wrap"><input type="checkbox" id="c-loop"> Loop</label>
+        <span id="loop-hint" hidden>Loop stays on while a 12-key drill or call and response is set.</span>
         <label class="check"><input type="checkbox" id="c-hide"> Hide notes</label>
         <label class="check"><input type="checkbox" id="c-cr"> Call and response</label>
         <label class="check" id="tab-wrap" hidden><input type="checkbox" id="c-tab"> Show tab</label>
@@ -175,7 +176,7 @@
   <button type="button" id="pb-next" class="btn pb-next" aria-label="Next lick (generate)">Next</button>
   <div class="pb-key">
     <button type="button" id="pb-dn" class="btn square mono" aria-label="Key down a semitone">−</button>
-    <p class="pb-read mono" id="pb-read" role="status" aria-live="polite"><span id="pb-key"></span><span id="pb-bar" class="muted"></span></p>
+    <p class="pb-read mono" id="pb-read"><span id="pb-key"></span><span id="pb-bar" class="muted"></span></p>
     <button type="button" id="pb-up" class="btn square mono" aria-label="Key up a semitone">+</button>
   </div>
 </nav>
@@ -233,7 +234,7 @@
     <!-- call and response (C3) -->
     <fieldset class="field drill" id="cr-set">
       <legend class="label">Call and response</legend>
-      <div class="drill-row"><span id="cr-resp-label">Response passes per call</span>
+      <div class="drill-row" role="radiogroup" aria-labelledby="cr-resp-label"><span id="cr-resp-label">Response passes per call</span>
         <label class="check"><input type="radio" name="cr-resp" value="1"> 1</label>
         <label class="check"><input type="radio" name="cr-resp" value="2"> 2</label>
       </div>

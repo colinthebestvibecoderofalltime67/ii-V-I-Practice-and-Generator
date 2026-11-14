@@ -11,7 +11,7 @@ import { renderLick, type NoteLabel } from './render/notation';
 import { lickFingerings } from './render/tab';
 import { Player, type PassAction, type PlayOptions } from './audio/player';
 import { sessionStep, type SessionConfig } from './practice/session';
-import { clampInt, drillKeys, type DrillConfig, type DrillOrder } from './practice/drill';
+import { clampInt, drillKeys, drillStep, type DrillConfig, type DrillOrder } from './practice/drill';
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
 import { Library } from './ui/library';
@@ -136,7 +136,13 @@ function syncControls(): void {
   $<HTMLInputElement>('c-straight16').disabled = !settings.swing;
   $('straight16-wrap').setAttribute('aria-disabled', String(!settings.swing));
   check('c-piano', settings.piano);
-  check('c-loop', settings.loop);
+  // While a drill or call and response is set, Loop is forced on: show that, and say why it cannot be changed.
+  const loopForced = drillOn() || settings.callResponse;
+  check('c-loop', settings.loop || loopForced);
+  $<HTMLInputElement>('c-loop').disabled = loopForced;
+  $('loop-wrap').setAttribute('aria-disabled', String(loopForced));
+  $('loop-wrap').title = loopForced ? $('loop-hint').textContent ?? '' : '';
+  if (loopForced) $('c-loop').setAttribute('aria-describedby', 'loop-hint'); else $('c-loop').removeAttribute('aria-describedby');
   check('c-hide', settings.hide);
   $('tab-wrap').hidden = !i.tab;
   check('c-tab', settings.showTab);
@@ -442,7 +448,7 @@ function refit(keyPc: number): void {
 function restartIfPlaying(): void {
   if (player.state === 'stopped') return;
   if (player.state === 'paused') { stopPlayback(); renderNotation(); return; }
-  startPlayback();
+  startPlayback(true); // a setting changed mid-play: the drill (if any) keeps its position
 }
 
 /* ---------------------------------------------------------------- playback */
@@ -457,13 +463,22 @@ function playOptions(): PlayOptions {
   };
 }
 
-function startPlayback(): void {
+/**
+ * Start playing. `keepDrill` is for restarts caused by a setting change while playing: the running drill carries its
+ * position (key, repeat, tempo-ladder step) into the new play. Without it (Play from stopped) a new drill begins.
+ */
+function startPlayback(keepDrill = false): void {
   if (!lick) return;
-  finishDrill(); // a restart mid-drill keeps the key on screen and drills from there
+  const prev = keepDrill ? drill : null;
+  if (!keepDrill) finishDrill();
   highlight = [];
   const bars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
-  const run = startDrill();
-  player.play(lick, playOptions(), {
+  const run = startDrill(prev);
+  if (prev && !run) { drill = prev; finishDrill(); } // both drill and call-and-response were turned off
+  if (prev) setResponseHide(false);
+  const opts = playOptions();
+  if (run) opts.bpm = sessionStep(run.session, run.offset).bpm ?? opts.bpm;
+  player.play(lick, opts, {
     onNote: (idx, cur) => {
       highlight = idx;
       currentNote = cur ?? -1;
@@ -474,7 +489,7 @@ function startPlayback(): void {
     onStatus: s => { if (/count/i.test(s)) setStatus(s.toLowerCase()); },
     onPass: run ? drillOnPass : undefined,
     onPassStart: run ? drillOnPassStart : undefined,
-    onEnd: () => { finishDrill(); highlight = []; setStatus(run ? (drillOn() ? 'Drill complete' : 'Ready') : 'Ready'); updateTransport(); renderNotation(); },
+    onEnd: () => { finishDrill(); highlight = []; setStatus(run?.session.drill ? 'Drill complete' : 'Ready'); updateTransport(); renderNotation(); },
   });
   updateTransport();
 }
@@ -488,22 +503,52 @@ interface DrillRun {
   base: Lick;
   /** History id of the lick on screen when the drill began; replaced by the lick shown at the end. */
   originalId: string;
+  /** The order `session.keys` was built for. */
+  order: DrillOrder;
+  /** Session pass number that this play's pass 0 corresponds to (non-zero after a restart that kept the position). */
+  offset: number;
+  /** The call+response group last started (0-based), and the effective BPM the ladder was built from. */
+  lastGroup: number;
+  userBpm: number;
 }
 let drill: DrillRun | null = null;
 
 const drillOn = (): boolean => settings.drillOrder !== 'off';
 
-/** Turn the settings into a run, or null when neither the drill nor call and response is on. Loop is switched on. */
-function startDrill(): DrillRun | null {
+/**
+ * Turn the settings into a run, or null when neither the drill nor call and response is on. Loop is forced on (see
+ * syncControls), not written to the setting. `prev` is the run being replaced by a settings-change restart: the key
+ * list, the group reached and the tempo-ladder step carry over, so the drill does not go back to key 1.
+ * Changing the Order instead starts the new order from the key on screen, at the tempo the ladder had reached.
+ */
+function startDrill(prev: DrillRun | null = null): DrillRun | null {
   if (!lick || !(drillOn() || settings.callResponse)) return null;
-  if (!settings.loop) { settings.loop = true; persist(); syncControls(); }
-  const base = sourceLick && sourceLick.id === lick.id ? sourceLick : lick;
+  const base = prev?.base ?? (sourceLick && sourceLick.id === lick.id ? sourceLick : lick);
   const cfg: DrillConfig = { order: settings.drillOrder, repeats: settings.drillRepeats, tempoStep: settings.drillTempoStep, maxBpm: settings.drillMaxBpm, tempoEvery: 'key' };
+  const eff = effectiveBpm();
+  const groupSize = settings.callResponse ? 1 + settings.responsePasses : 1;
+  let keys: readonly number[] = [lick.keyPc];
+  let startBpm = eff;
+  let group = 0;
+  if (drillOn()) {
+    const pc = prev?.session.drill ? prev.session.drill : null;
+    if (prev && pc && prev.order === settings.drillOrder) {
+      keys = prev.session.keys;
+      startBpm = prev.session.startBpm + (eff - prev.userBpm); // a tempo change moves the whole ladder
+      group = prev.lastGroup;
+    } else {
+      keys = drillKeys(lick.keyPc, settings.drillOrder, randomSeed());
+      if (prev && pc) startBpm = drillStep(pc, prev.session.keys, prev.session.startBpm, prev.lastGroup).bpm + (eff - prev.userBpm);
+    }
+  }
   drill = {
-    session: { callResponse: settings.callResponse, responses: settings.responsePasses, drill: drillOn() ? cfg : null,
-      keys: drillOn() ? drillKeys(lick.keyPc, settings.drillOrder, randomSeed()) : [lick.keyPc], startBpm: effectiveBpm() },
+    session: { callResponse: settings.callResponse, responses: settings.responsePasses, drill: drillOn() ? cfg : null, keys, startBpm },
     base,
-    originalId: lick.id,
+    originalId: prev?.originalId ?? lick.id,
+    order: settings.drillOrder,
+    offset: group * groupSize,
+    lastGroup: group,
+    userBpm: eff,
   };
   return drill;
 }
@@ -512,7 +557,7 @@ function startDrill(): DrillRun | null {
 function drillOnPass(passIndex: number): PassAction | void {
   const d = drill;
   if (!d) return;
-  const st = sessionStep(d.session, passIndex);
+  const st = sessionStep(d.session, passIndex + d.offset);
   if (st.done) return { stop: true };
   const action: PassAction = { silentLead: st.silentLead };
   if (st.bpm != null) action.bpm = st.bpm;
@@ -524,11 +569,12 @@ function drillOnPass(passIndex: number): PassAction | void {
 function drillOnPassStart(passIndex: number, info: { lick: Lick; bpm: number }): void {
   const d = drill;
   if (!d) return;
-  const st = sessionStep(d.session, passIndex);
+  const st = sessionStep(d.session, passIndex + d.offset);
+  d.lastGroup = st.groupIndex;
   if (info.lick !== lick) {
-    settings.key = info.lick.keyPc;
-    persist();
-    showLick(info.lick, false, undefined, true); // nothing goes to History until the drill stops
+    // The key SETTING is left alone while drilling (a Random setting stays Random, and a reload mid-drill still
+    // matches the History lick); finishDrill commits it. Nothing goes to History until the drill stops.
+    showLick(info.lick, false, undefined, true);
   }
   setResponseHide(st.role === 'response' && !settings.showNotesInResponse);
   const parts: string[] = [];
@@ -542,7 +588,10 @@ function drillOnPassStart(passIndex: number, info: { lick: Lick; bpm: number }):
   setStatus(parts.join(' · '));
 }
 
-/** End the drill: the lick on screen (the last key reached) replaces the starting lick in History. */
+/**
+ * End the drill: the lick on screen (the last key reached) replaces the starting lick in History. The key select then
+ * follows the lick on screen, unless the setting is Random (which stays Random), so a reload shows the same lick/key.
+ */
 function finishDrill(): void {
   const d = drill;
   drill = null;
@@ -550,13 +599,22 @@ function finishDrill(): void {
   if (!d || !lick || lick.id === d.originalId) return;
   history = store.removeHistory(d.originalId);
   history = store.addHistory(lick);
+  if (settings.key !== 'random' && settings.key !== lick.keyPc) {
+    settings.key = lick.keyPc;
+    persist();
+    $<HTMLSelectElement>('sel-key').value = String(settings.key);
+    updateRecap();
+  }
 }
+
+/** Status text from just before Pause, restored on Resume. */
+let pausedStatus = '';
 
 function togglePlay(): void {
   if (!lick) return;
   if (player.state === 'stopped') startPlayback();
-  else if (player.state === 'playing') { player.pause(); setStatus('Paused'); }
-  else { player.resume(); }
+  else if (player.state === 'playing') { pausedStatus = $('status').textContent ?? ''; player.pause(); setStatus('Paused'); }
+  else { player.resume(); setStatus(pausedStatus); } // the pass status (key, tempo, listen/your turn) is only set at pass starts
   updateTransport();
 }
 
@@ -602,6 +660,7 @@ async function doPdf(): Promise<void> {
 
 /** Copy text without the async clipboard API: select a readonly input and execCommand('copy'). */
 function copyFallback(text: string): boolean {
+  const prevFocus = document.activeElement as HTMLElement | null;
   const input = document.createElement('input');
   input.readOnly = true;
   input.value = text;
@@ -613,12 +672,14 @@ function copyFallback(text: string): boolean {
   let ok = false;
   try { ok = document.execCommand('copy'); } catch { ok = false; }
   input.remove();
+  prevFocus?.focus?.(); // selecting the input moved focus; give it back (removing it would drop focus to <body>)
   return ok;
 }
 
 async function doShare(): Promise<void> {
   if (!lick) return;
-  const url = shareUrl(lick, location.href);
+  let url: string;
+  try { url = shareUrl(lick, location.href); } catch { exportStatus("This lick can't be shared.", 6000); return; }
   $('btn-share').dataset.url = url;
   let ok = false;
   try { await navigator.clipboard.writeText(url); ok = true; } catch { ok = copyFallback(url); }
@@ -771,7 +832,7 @@ function bind(): void {
   };
   $('r-lead').addEventListener('input', vol);
   $('r-piano').addEventListener('input', vol);
-  $<HTMLSelectElement>('sel-drill').addEventListener('change', e => { setting('drillOrder', (e.target as HTMLSelectElement).value as DrillOrder); });
+  $<HTMLSelectElement>('sel-drill').addEventListener('change', e => { setting('drillOrder', (e.target as HTMLSelectElement).value as DrillOrder); restartIfPlaying(); });
   $<HTMLSelectElement>('sel-drill-rep').addEventListener('change', e => { setting('drillRepeats', clampInt(Number((e.target as HTMLSelectElement).value), 1, 4)); });
   const numSetting = (id: string, k: 'drillTempoStep' | 'drillMaxBpm', lo: number, hi: number): void => {
     const el = $<HTMLInputElement>(id);
@@ -791,7 +852,7 @@ function bind(): void {
     if (tag === 'SELECT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
     if (tag === 'INPUT' && !['radio', 'checkbox', 'range'].includes((t as HTMLInputElement).type)) return;
     if (e.key === ' ' || e.code === 'Space') {
-      if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT') return;
+      if (t?.closest('button,a,summary,input,select,textarea,[contenteditable]')) return;
       e.preventDefault();
       togglePlay();
     } else if (e.key === 'g' || e.key === 'G') {
@@ -799,6 +860,13 @@ function bind(): void {
     } else if (e.key === 'a' || e.key === 'A') {
       setAnalyze(!settings.analyze);
     }
+  });
+
+  // A share link opened in a tab that already has the app only changes the hash.
+  window.addEventListener('hashchange', () => {
+    if (parseShareHash(location.hash).kind === 'none') return;
+    stopPlayback();
+    openSharedLick();
   });
 
   // re-render notation on width change (debounced)

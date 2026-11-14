@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateLick } from '../src/generator';
-import { concertRange, getInstrument } from '../src/instruments';
+import { INSTRUMENTS, concertRange, getInstrument } from '../src/instruments';
 import { isValidLick } from '../src/storage';
 import { analyzeLick } from '../src/theory/analyze';
 import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
@@ -74,7 +74,7 @@ describe('share codes', () => {
     const b = atob(code.replace(/-/g, '+').replace(/_/g, '/'));
     const flip = (i: number, v: number) =>
       btoa(Array.from(b, (ch, k) => String.fromCharCode(k === i ? v : ch.charCodeAt(0))).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    expect(decodeLick(flip(0, 0x20 | (b.charCodeAt(0) & 15)))).toBeNull(); // wrong version
+    expect(decodeLick(flip(0, 0x30 | (b.charCodeAt(0) & 15)))).toBeNull(); // unknown version
     expect(decodeLick(flip(1, 0xf0 | (b.charCodeAt(1) & 15)))).toBeNull(); // unknown progression
     expect(decodeLick(flip(1, (b.charCodeAt(1) & 0xf0) | 13))).toBeNull(); // key > 11
     expect(decodeLick(flip(2, 255))).toBeNull(); // score > 100
@@ -86,4 +86,33 @@ describe('share codes', () => {
       if (d) expect(isValidLick(d)).toBe(true);
     }
   });
+
+  it('encodes a quarter-triplet pair (dur 16) and still decodes v1 links', () => {
+    const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, targetScore: 90, range, seed: 369 });
+    expect(l.notes.some(n => n.dur === 16)).toBe(true);
+    expect(() => shareUrl(l, 'https://x.test/')).not.toThrow();
+    roundTrip(l);
+    // a v1 link (version nibble 1, no dur 16) written by the old encoder must keep decoding to the same lick
+    const l1 = generateLick({ progressionId: 'major-251', length: 'short', keyPc: 2, tier: 2, range, seed: 3 });
+    const bytes = Array.from(atob(encodeLick(l1).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+    bytes[0] = (bytes[0] & 0x0f) | 0x10;
+    const v1 = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const d = decodeLick(v1);
+    expect(d).not.toBeNull();
+    expect(d!.notes).toEqual(l1.notes);
+  });
+
+  it('sweep: every generated lick (instruments x progressions x lengths x targets x seeds) encodes and round-trips', () => {
+    let n = 0;
+    for (const inst of INSTRUMENTS) for (const p of PROGRESSIONS) for (const length of lengths) for (const target of [15, 50, 85, 100]) for (let s = 0; s < 2; s++) {
+      const tier = ([1, 2, 3, 4] as Tier[])[Math.min(3, Math.floor(target / 26))];
+      const l = generateLick({ progressionId: p.id, length, keyPc: (s * 7 + target + n) % 12, tier, targetScore: target, range: concertRange(inst), seed: s * 977 + target + n });
+      const d = decodeLick(encodeLick(l));
+      expect(d, `${inst.id} ${l.id}`).not.toBeNull();
+      expect(d!.notes).toEqual(l.notes);
+      n++;
+    }
+    expect(n).toBe(INSTRUMENTS.length * PROGRESSIONS.length * 3 * 4 * 2);
+    expect(n).toBeGreaterThan(1500);
+  }, 240000);
 });

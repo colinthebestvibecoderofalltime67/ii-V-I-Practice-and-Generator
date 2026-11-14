@@ -34,7 +34,7 @@ describe('lickMetrics', () => {
     const m = lickMetrics(l);
     expect(m.seamRepeats).toBe(1);
     expect(m.altNaturalOnBeat).toBe(1);
-    expect(m.longChromaticOnBeat).toBe(1);
+    expect(m.longChromaticOnBeat).toBe(2); // the natural 5 (D) and F♯ are both outside the altered scale, each held a beat
     expect(m.dominantArrivalGuide).toEqual([false]);
     expect(summarize([l]).seamRepeatShare).toBe(1);
   });

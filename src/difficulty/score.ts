@@ -2,7 +2,7 @@ import type { DifficultyFeature, DifficultyResult, LickChord, LickNote, Progress
 import { ALTERED_RELS, inScale, isChordTone, isChordToneOrTension } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 import { TICKS_PER_16TH as S16, TPB } from '../types';
-import { beatOf, findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm';
+import { beatOf, findTupletGroups, isTupletDur, judgedChord, type TupletKind } from '../theory/rhythm';
 
 /**
  * Difficulty scoring (0..100) from the NOTES ONLY (tempo is not a factor).
@@ -10,21 +10,25 @@ import { beatOf, findTupletGroups, isTupletDur, type TupletKind } from '../theor
  * Each feature maps a measured value to 0..max points by a clamped linear ramp. The maxima
  * sum to 100. Weights and thresholds were calibrated against the 55 prototype licks
  * (tests/difficulty.test.ts): Beginner = quarter-note scales/arpeggios, Medium = steady 8ths,
- * Advanced = 8ths with chromatic/altered colour. Tier 4 (Expert) needs what the prototype
- * barely has: 16th-note runs, heavy chromaticism / altered tensions, big leaps, wide range.
+ * Advanced = 8ths with chromatic/altered colour. Tier 4 (Expert) is reached by jazz LANGUAGE, not speed: 16th-note
+ * runs are capped at a small share of the points; chromatic enclosures and approach notes, altered tensions (a long,
+ * resolving altered note counts for much less than a fast altered run), syncopation and anticipations, rests and
+ * rhythmic variety, and register span carry the rest.
  */
 export const TIER_THRESHOLDS: [number, number, number] = [7, 15, 44];
 
 export const FEATURE_MAX = {
-  density: 20,
-  sixteenths: 14,
+  density: 18,
+  sixteenths: 8,
   syncopation: 10,
-  offchord: 14,
-  chromatic: 14,
-  altered: 8,
+  offchord: 12,
+  chromatic: 12,
+  altered: 10,
+  approach: 6,
   leaps: 8,
   range: 4,
   harmony: 8,
+  phrasing: 4,
   /** Only present (and only > 0) for licks that contain a triplet group; see TRIPLET_WEIGHT. The other maxima sum
    *  to 100, so this is bonus headroom: scores are clamped to 100 and licks without triplets are unchanged. */
   triplets: 10,
@@ -62,10 +66,11 @@ export function displayScore(score: number): number {
 }
 
 /**
- * Practical maximum score: the 95th percentile of 360 Expert licks (all progressions, lengths,
- * four instruments, seeds 1..360) was 57.4, rounded up. The slider's top end maps here.
+ * Practical maximum score of the slider's top end. Untargeted Expert licks reach a 95th percentile of about 59, but
+ * that tail needs 16th-note walls; with the 16th-share cap and the musical preferences (no avoid notes, no big leaps,
+ * altered V that sounds altered) targets above ~54 are not met within the slider-accuracy bounds, so the top is 54.
  */
-export const SCORE_CEIL = 58;
+export const SCORE_CEIL = 54;
 
 /** Slider positions (0..100) of the boundaries between tiers 1|2, 2|3, 3|4: each tier gets a quarter of the travel. */
 export const TIER_POS: [number, number, number] = [25, 50, 75];
@@ -89,12 +94,8 @@ export const scoreToPos = (score: number): number => piecewise(score, KNOTS_SCOR
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
-function chordAt(chords: LickChord[], tick: number): LickChord {
-  for (let i = chords.length - 1; i >= 0; i--) if (tick >= chords[i].start) return chords[i];
-  return chords[0];
-}
 
-interface Attack { midi: number; start: number; dur: number; tied: boolean; crossesBeat: boolean }
+interface Attack { midi: number; start: number; dur: number; tied: boolean; crossesBeat: boolean; chord: number }
 
 /** Merge tie chains into single sounding attacks. */
 function attacks(notes: LickNote[]): Attack[] {
@@ -102,6 +103,7 @@ function attacks(notes: LickNote[]): Attack[] {
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i];
     if (n.midi == null) continue;
+    const i0 = i;
     let dur = n.dur;
     let tied = false;
     let j = i;
@@ -115,6 +117,8 @@ function attacks(notes: LickNote[]): Attack[] {
     out.push({
       midi: n.midi, start: n.start, dur, tied,
       crossesBeat: beatOf(end - 1) > beatOf(n.start),
+      // an anticipation head is judged against the chord it arrives on
+      chord: judgedChord(notes, i0),
     });
   }
   return out;
@@ -147,26 +151,66 @@ export function scoreLick(notes: LickNote[], chords: LickChord[], progression: P
   }
   const syncPerBeat = sync / beats;
 
-  // chromaticism and altered tensions relative to the sounding chord
+  // chromaticism and altered tensions relative to the chord each note belongs to (anticipation heads: the arrival chord)
+  const lydian = chords.map((_, i) => progression.slots[i]?.roman === '♭II7' || progression.slots[i]?.roman === '♭VII7');
+  const chordOf = (a: Attack): LickChord => chords[a.chord] ?? chords[0];
   let chroma = 0;
   let nct = 0;
   let altN = 0;
+  let altWeighted = 0;
   let domN = 0;
-  for (const a of att) {
-    const c = chordAt(chords, a.start);
-    const inside = inScale(a.midi, c.rootPc, c.quality) || isChordToneOrTension(a.midi, c.rootPc, c.quality);
+  att.forEach((a, k) => {
+    const c = chordOf(a);
+    const rel = mod12(a.midi - c.rootPc);
+    const lyd11 = c.quality === 'dom7' && lydian[a.chord] && rel === 6; // sharp 11 of a Lydian dominant: a tension, not chromatic
+    const inside = lyd11 || inScale(a.midi, c.rootPc, c.quality) || isChordToneOrTension(a.midi, c.rootPc, c.quality);
     if (!inside) chroma += 1;
-    if (!isChordTone(a.midi, c.rootPc, c.quality)) nct += 1;
+    let nctW = isChordTone(a.midi, c.rootPc, c.quality) ? 0 : 1;
     if (c.quality === 'dom7' || c.quality === 'dom7alt') {
       domN++;
-      if (ALTERED_RELS.includes(mod12(a.midi - c.rootPc))) altN++;
+      if (ALTERED_RELS.includes(rel) || lyd11) {
+        altN++;
+        // a long altered note that steps into a chord tone is a colour, not a technical demand
+        const nx = att[k + 1];
+        const resolves = a.dur >= TPB && nx != null && Math.abs(nx.midi - a.midi) <= 2 && isChordTone(nx.midi, chordOf(nx).rootPc, chordOf(nx).quality);
+        altWeighted += resolves ? 0.2 : 1;
+        if (resolves && nctW) nctW = 0.2;
+      }
     }
-  }
+    nct += nctW;
+  });
   const chromaShare = chroma / N;
   const nctShare = nct / N;
-  const altShare = domN ? altN / domN : 0;
+  const altShare = domN ? altWeighted / domN : 0;
   // for altered chords the altered scale is "in scale", so count altered share over all attacks too
   const altOfAll = altN / N;
+
+  // approach notes and enclosures: a chromatic neighbour of a chord tone that the line then resolves onto
+  const isCT = (a: Attack) => isChordTone(a.midi, chordOf(a).rootPc, chordOf(a).quality);
+  let approachLoad = 0;
+  for (let i = 0; i + 1 < att.length; i++) {
+    const t = att[i + 1];
+    const d = att[i].midi - t.midi;
+    if (!isCT(t) || isCT(att[i]) || att[i].dur >= TPB) continue; // a held note is a colour, not a quick approach
+    const prevPitch = i > 0 ? att[i - 1].midi : null;
+    if (Math.abs(d) === 1) {
+      approachLoad += 1;
+      // enclosure: the note before approaches from the other side
+      if (prevPitch != null && Math.sign(prevPitch - t.midi) === -Math.sign(d) && Math.abs(prevPitch - t.midi) <= 2 && !isCT(att[i - 1])) approachLoad += 0.5;
+    }
+  }
+  // two-note enclosures where the first note is the diatonic neighbour (x, chromatic y, target)
+  for (let i = 0; i + 2 < att.length; i++) {
+    const t = att[i + 2];
+    const x = att[i].midi - t.midi;
+    const y = att[i + 1].midi - t.midi;
+    if (isCT(t) && !isCT(att[i]) && !isCT(att[i + 1]) && Math.abs(x) <= 2 && Math.abs(y) === 1 && Math.sign(x) === -Math.sign(y)) approachLoad += 0.5;
+  }
+
+  // phrasing: rests and rhythmic variety
+  const restTicks = notes.reduce((m, n) => m + (n.midi == null ? n.dur : 0), 0);
+  const restShare = restTicks / Math.max(1, endTick);
+  const distinctDur = new Set(att.map(a => a.dur)).size;
 
   // leaps
   let sum = 0;
@@ -197,23 +241,28 @@ export function scoreLick(notes: LickNote[], chords: LickChord[], progression: P
 
   const F = FEATURE_MAX;
   const features: DifficultyFeature[] = [
-    { id: 'density', label: 'Busy rhythm', value: r1(density), points: F.density * ramp(density, 0.9, 3.4) },
+    { id: 'density', label: 'Busy rhythm', value: r1(density), points: F.density * ramp(density, 0.9, 3.2) },
     {
       id: 'sixteenths', label: '16th-note runs', value: r1(share16 * 100),
-      points: F.sixteenths * (0.6 * ramp(share16, 0.0, 0.5) + 0.4 * ramp(run16Share, 0, 0.4)),
+      points: F.sixteenths * (0.6 * ramp(share16, 0.0, 0.35) + 0.4 * ramp(run16Share, 0, 0.3)),
     },
     { id: 'syncopation', label: 'Syncopation', value: r1(syncPerBeat), points: F.syncopation * ramp(syncPerBeat, 0.05, 1.0) },
     { id: 'offchord', label: 'Passing & extension tones', value: r1(nctShare * 100), points: F.offchord * ramp(nctShare, 0.05, 0.4) },
-    { id: 'chromatic', label: 'Chromatic notes', value: r1(chromaShare * 100), points: F.chromatic * ramp(chromaShare, 0.04, 0.35) },
+    { id: 'chromatic', label: 'Chromatic notes', value: r1(chromaShare * 100), points: F.chromatic * ramp(chromaShare, 0.04, 0.25) },
     {
       id: 'altered', label: 'Altered tensions', value: r1(Math.max(altShare, altOfAll) * 100),
-      points: F.altered * ramp(altShare, 0.12, 0.6),
+      points: F.altered * ramp(altShare, 0.1, 0.5),
     },
     {
       id: 'leaps', label: 'Wide leaps', value: max,
       points: F.leaps * (0.4 * ramp(meanLeap, 2.6, 5.5) + 0.3 * ramp(max, 7, 14) + 0.3 * ramp(bigShare, 0, 0.2)),
     },
     { id: 'range', label: 'Wide range', value: span, points: F.range * ramp(span, 10, 26) },
+    { id: 'approach', label: 'Chromatic approaches', value: r1(approachLoad), points: F.approach * ramp(approachLoad / beats, 0.03, 0.3) },
+    {
+      id: 'phrasing', label: 'Rests & rhythmic variety', value: r1(restShare * 100),
+      points: F.phrasing * (0.5 * ramp(restShare, 0.04, 0.15) + 0.5 * ramp(distinctDur, 3, 6)),
+    },
     { id: 'harmony', label: 'Advanced harmony', value: progression.complexity, points: F.harmony * progression.complexity },
   ];
   if (tripletGroups > 0) {

@@ -215,7 +215,8 @@ describe('targetScore (difficulty slider)', () => {
         expect(p90, `p90 error at pos ${pos}`).toBeLessThanOrEqual(3);
       }
     }
-    expect(median(all)).toBeLessThanOrEqual(0.8);
+    // Musical preferences (guide-tone landings, comfort range) trade a little accuracy: about 0.7 points median.
+    expect(median(all)).toBeLessThanOrEqual(1.0);
     expect(tierHit / total, 'target tier hit rate').toBeGreaterThanOrEqual(0.85);
   }, 120_000);
 

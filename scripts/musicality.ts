@@ -4,8 +4,8 @@
  * Sample: every progression x length x slider position (5..95 step 10) x seeds, on alto sax and guitar.
  */
 import { generateLick } from '../src/generator';
-import { posToScore } from '../src/difficulty/score';
-import { concertRange, getInstrument } from '../src/instruments';
+import { posToScore, tierForScore } from '../src/difficulty/score';
+import { concertRange, concertRangeForLevel, getInstrument } from '../src/instruments';
 import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
 import { summarize, type MusicalitySummary } from '../src/analysis/musicality';
 import { TIER_NAMES, type LengthId, type Lick, type Tier } from '../src/types';
@@ -22,7 +22,7 @@ for (const p of PROGRESSIONS) {
     for (const pos of POSITIONS) {
       for (let s = 0; s < SEEDS; s++) {
         const inst = INSTS[s % INSTS.length];
-        const l = generateLick({ progressionId: p.id, length, keyPc: (seed * 5) % 12, tier: 1, targetScore: posToScore(pos), range: concertRange(inst), seed: seed++ });
+        const l = generateLick({ progressionId: p.id, length, keyPc: (seed * 5) % 12, tier: 1, targetScore: posToScore(pos), range: concertRange(inst), comfortRange: concertRangeForLevel(inst, tierForScore(posToScore(pos))), seed: seed++ });
         all.push(l);
         byTier[l.requestedTier].push(l);
       }

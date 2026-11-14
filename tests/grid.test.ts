@@ -137,20 +137,20 @@ describe('generator output on the new grid', () => {
     for (const s of lick.cellStarts!) expect(s % TPB).toBe(0);
   });
   it('reproduces the pre-migration lick (seed 3, tier 3, key C, tenor range)', () => {
-    expect(lick.fragmentIds).toEqual(['m7-proto-04', 'dom7-proto-52', 'maj7-orig-24']);
-    expect(lick.cellStarts).toEqual([0, 48, 96]);
+    expect(lick.fragmentIds).toEqual(['m7-orig-33', 'm7-proto-48h1', 'dom7-orig-17', 'maj7-orig-22']);
+    expect(lick.cellStarts).toEqual([0, 24, 48, 96]);
     expect(lick.difficulty.score).toBe(21.7);
-    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[50, 0, 6], [52, 6, 6], [53, 12, 6], [55, 18, 6]]);
-    expect(lick.notes.length).toBe(22);
+    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[null, 0, 12], [53, 12, 6], [50, 18, 6], [null, 24, 6]]);
+    expect(lick.notes.length).toBe(21);
   });
   it('exports byte-identical MIDI (sha1 of files dumped before the migration)', () => {
     const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, range, seed: 3, fragments: LEGACY_POOL });
-    expect(l.difficulty.score).toBe(48.1);
+    expect(l.difficulty.score).toBe(45.7);
     const sha = (swing: boolean, comping: boolean) =>
       createHash('sha1').update(lickToMidi(l, { bpm: 120, swing, comping, comp: 'rootless' })).digest('hex');
-    expect(sha(false, false)).toBe('1f83b91d41114ffb139d82dc24a51c59580de3c0');
-    expect(sha(false, true)).toBe('eda9f4b78a9b6277d2e64ae87b81fa8a865f143f');
-    expect(sha(true, false)).toBe('f03cd850ffbb649fd404cfcc9950b64364f02f1a');
-    expect(sha(true, true)).toBe('f7221c373e4f4e6ffbf546af7fcf5487117a50da');
+    expect(sha(false, false)).toBe('ef29995cbe1e9a8ee48373734b561680a53ef910');
+    expect(sha(false, true)).toBe('360ee7ca2b8e5360419e7f030dc418a9acd0da5f');
+    expect(sha(true, false)).toBe('a080c9f179352cbeecd5de55c65d228eea10d69d');
+    expect(sha(true, true)).toBe('f03a4df42a39f0843887a2c93a745d15533165a7');
   });
 });

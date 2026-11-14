@@ -1,13 +1,13 @@
 import type { ChordQualityId, Fragment, LengthId, Lick, LickChord, LickNote, Tier } from '../types';
 import { RENDERABLE_DURS, TPB } from '../types';
 import { FRAGMENTS } from '../fragments';
-import { CHORDS } from '../theory/chords';
+import { CHORDS, inScale } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
 import { findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm';
 import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
 import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, scoreToPos, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
-import { type Ev, eventsToNotes, fixJoins, leapPenalty, phraseEvents } from './connect';
+import { type Ev, chordIndexAt, eventsToNotes, evDur, fixJoins, leapPenalty, phraseEvents } from './connect';
 
 export interface GenerateOptions {
   progressionId: string;
@@ -21,6 +21,11 @@ export interface GenerateOptions {
   targetScore?: number;
   /** CONCERT comfortable range (use concertRange(inst)). */
   range: [number, number];
+  /**
+   * Optional CONCERT tessitura the licks should prefer (e.g. rangeForLevel(inst, tier) shifted to concert pitch).
+   * `range` stays the hard limit; the comfort range steers octave choice and candidate ranking. Clamped to `range`.
+   */
+  comfortRange?: [number, number];
   /** default: random */
   seed?: number;
   /** default: FRAGMENTS */
@@ -355,6 +360,46 @@ function lickCost(events: Ev[], fragStarts: number[], range: [number, number], f
   return cost;
 }
 
+/**
+ * Landing penalty by the note's degree (semitones above the chord root), in "score points" so it can be added to the
+ * candidate's distance from the target. Dominants must land on the 3rd or 7th; the tonic's best landings are the 3rd,
+ * 7th/6th, then 9th and 5th (root weakest); other chords prefer a guide tone too.
+ */
+function landingPenalty(q: ChordQualityId, rel: number, last: boolean): number {
+  const c = CHORDS[q];
+  if (c.guide.some(g => mod12(g) === rel)) return 0;
+  if (q === 'dom7' || q === 'dom7alt') return rel === 0 ? 3 : 2.5;
+  if (last) {
+    if (rel === 2 || rel === 7) return 0.15;
+    if (rel === 0) return 1.8;
+    return 0.6;
+  }
+  return rel === 0 ? 0.4 : 0.2;
+}
+
+/**
+ * Preference terms (score points) used to rank candidates besides difficulty: guide-tone arrivals at chord changes,
+ * no long non-scale note on a beat, and staying inside the comfortable tessitura.
+ */
+function preference(events: Ev[], chords: LickChord[], comfort: [number, number]): number {
+  let pen = 0;
+  chords.forEach((ch, ci) => {
+    const e = events.find(x => x.start <= ch.start && x.start + evDur(x) > ch.start);
+    if (!e || e.midi == null) return;
+    pen += landingPenalty(ch.quality, mod12(e.midi - ch.rootPc), ci === chords.length - 1);
+  });
+  let out = 0;
+  for (const e of events) {
+    if (e.midi == null) continue;
+    out += Math.max(0, comfort[0] - e.midi, e.midi - comfort[1]);
+    if (e.start % TPB === 0 && evDur(e) >= TPB) {
+      const ch = chords[chordIndexAt(chords, e.start)];
+      if (!inScale(e.midi, ch.rootPc, ch.quality)) pen += 1.5;
+    }
+  }
+  return pen + Math.min(out, 40) * 0.12;
+}
+
 const makeId = (progressionId: string, length: LengthId, keyPc: number, tier: Tier, seed: number) =>
   `${progressionId}-${length}-k${keyPc}-t${tier}-${seed}`;
 
@@ -383,10 +428,14 @@ export function generateLick(opts: GenerateOptions): Lick {
   const chords = expandProgression(def, opts.length, keyPc);
   const slotBeats = LENGTHS[opts.length].beats;
   const totalTicks = chords.reduce((a, c) => a + c.dur, 0);
+  const comfort: [number, number] = opts.comfortRange
+    ? [Math.max(opts.range[0], opts.comfortRange[0]), Math.min(opts.range[1], opts.comfortRange[1])]
+    : opts.range;
+  const fitRange = comfort[1] - comfort[0] >= 14 ? comfort : opts.range;
   const pools = makePools(opts.fragments ?? FRAGMENTS);
   const rng = new Rng(seed);
 
-  let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number } | null = null;
+  let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number; pref: number } | null = null;
   // Without a target the level is the tier (integer, exactly the original weighting). With a target it starts at
   // the target's fractional level and is nudged each round toward where the candidates actually scored.
   let level = target !== undefined ? levelForTarget(target) : reqTier;
@@ -395,21 +444,22 @@ export function generateLick(opts: GenerateOptions): Lick {
     const roundScores: number[] = [];
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
       const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier);
-      const octaves = chooseOctaves(plan, chords, opts.range);
+      const octaves = chooseOctaves(plan, chords, fitRange);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range);
       phraseEvents(rng, events, fragStarts, chords, opts.range, { level });
       const notes = eventsToNotes(events, chords);
       const cost = lickCost(events, fragStarts, opts.range, fixes);
       const score = scoreLick(notes, chords, def).score;
+      const pref = preference(events, chords, fitRange);
       roundScores.push(score);
       // With a target, staying inside the target's tier outranks closeness (a target on a boundary must not land across it).
       const dist = target !== undefined
-        ? (tierDistance(score, reqTier) > 0 ? 1000 : 0) + Math.abs(score - target)
-        : tierDistance(score, reqTier);
-      if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist };
+        ? (tierDistance(score, reqTier) > 0 ? 1000 : 0) + Math.abs(score - target) + pref
+        : (tierDistance(score, reqTier) > 0 ? 1000 + tierDistance(score, reqTier) : 0) + pref;
+      if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist, pref };
     }
-    if (best && best.dist <= tol) break;
+    if (best && best.dist - best.pref <= tol) break;
     if (target !== undefined) {
       const mid = [...roundScores].sort((a, b) => a - b)[roundScores.length >> 1];
       if (mid > target + tol) level = Math.max(1, level - 0.4);

@@ -3,7 +3,7 @@ import type { Instrument, Lick, Tier } from './types';
 import { TIER_NAMES, TPBAR } from './types';
 import { barOf } from './theory/rhythm';
 import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
-import { INSTRUMENTS, concertRange, getInstrument } from './instruments';
+import { INSTRUMENTS, concertRange, concertRangeForLevel, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
 import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from './difficulty/score';
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
@@ -378,6 +378,7 @@ function generate(): void {
     tier: targetTier(),
     targetScore: posToScore(settings.target),
     range: concertRange(inst()),
+    comfortRange: concertRangeForLevel(inst(), targetTier()),
     seed: randomSeed(),
   });
   if (settings.hide) { settings.hide = false; persist(); syncControls(); }

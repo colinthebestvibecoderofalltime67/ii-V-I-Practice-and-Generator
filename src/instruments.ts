@@ -1,4 +1,4 @@
-import type { Instrument } from './types';
+import type { Instrument, Tier } from './types';
 
 /** Written ranges are comfortable (not extreme) ranges. transpose = written − concert. */
 export const INSTRUMENTS: Instrument[] = [
@@ -32,4 +32,39 @@ export function getInstrument(id: string): Instrument {
 /** Comfortable range converted to CONCERT pitch (what the generator needs). */
 export function concertRange(inst: Instrument): [number, number] {
   return [inst.range[0] - inst.transpose, inst.range[1] - inst.transpose];
+}
+
+/**
+ * Comfortable WRITTEN tessitura by difficulty tier. Beginner stays in the middle of the horn, Intermediate trims
+ * the extremes less, Advanced only the very top, Expert may use the whole comfortable range. Narrow instruments
+ * (bass, low brass) are trimmed less so a lick always fits.
+ */
+const TRIM: Record<number, [number, number]> = { 1: [4, 6], 2: [2, 3], 3: [0, 1], 4: [0, 0] };
+/** Explicit WRITTEN ranges per instrument and tier (1..3); anything not listed uses TRIM. */
+const LEVEL_RANGE: Record<string, Partial<Record<1 | 2 | 3, [number, number]>>> = {
+  // alto/tenor: avoid low Bb-C# (58-61) and written C#6+ at Beginner; no altissimo-ish E6/F6 at Intermediate
+  alto: { 1: [62, 84], 2: [60, 86], 3: [58, 89] },
+  tenor: { 1: [62, 84], 2: [60, 86], 3: [58, 89] },
+  trumpet: { 1: [57, 79], 2: [55, 84], 3: [54, 85] },
+};
+
+export function rangeForLevel(inst: Instrument, tier: Tier): [number, number] {
+  const [lo, hi] = inst.range;
+  if (tier >= 4) return [lo, hi];
+  const explicit = LEVEL_RANGE[inst.id]?.[tier as 1 | 2 | 3];
+  if (explicit) return [Math.max(lo, explicit[0]), Math.min(hi, explicit[1])];
+  const [tl, th] = TRIM[tier];
+  const width = hi - lo;
+  // keep at least ~20 semitones so the generator always has room
+  const keep = Math.max(width - tl - th, 20);
+  const slack = width - keep;
+  const t = tl + th || 1;
+  const a = Math.min(lo + Math.round((slack * tl) / t), hi - keep);
+  return [a, a + keep];
+}
+
+/** Comfort range in CONCERT pitch (pass as GenerateOptions.comfortRange). */
+export function concertRangeForLevel(inst: Instrument, tier: Tier): [number, number] {
+  const [a, b] = rangeForLevel(inst, tier);
+  return [a - inst.transpose, b - inst.transpose];
 }

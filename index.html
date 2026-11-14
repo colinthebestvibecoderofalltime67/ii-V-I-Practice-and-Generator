@@ -84,6 +84,7 @@
         <label class="check"><input type="checkbox" id="c-piano"> Backing</label>
         <label class="check"><input type="checkbox" id="c-loop"> Loop</label>
         <label class="check"><input type="checkbox" id="c-hide"> Hide notes</label>
+        <label class="check"><input type="checkbox" id="c-cr"> Call and response</label>
         <label class="check" id="tab-wrap" hidden><input type="checkbox" id="c-tab"> Show tab</label>
         <label class="check" id="fingers-wrap" hidden><input type="checkbox" id="c-fingers"> Finger numbers</label>
         <button type="button" id="btn-sound" class="tbtn quiet" aria-haspopup="dialog">Sound settings</button>
@@ -228,6 +229,17 @@
         <span>BPM</span>
       </div>
       <p class="small muted" id="drill-hint">Plays the current lick once through all 12 keys, then stops on the last key. Turns Loop on.</p>
+    </fieldset>
+    <!-- call and response (C3) -->
+    <fieldset class="field drill" id="cr-set">
+      <legend class="label">Call and response</legend>
+      <div class="drill-row"><span id="cr-resp-label">Response passes per call</span>
+        <label class="check"><input type="radio" name="cr-resp" value="1"> 1</label>
+        <label class="check"><input type="radio" name="cr-resp" value="2"> 2</label>
+      </div>
+      <label class="check"><input type="checkbox" id="c-cr-show"> Show notes during your turn</label>
+      <label class="check"><input type="checkbox" id="c-hide-keep"> Keep chord symbols visible when hiding notes</label>
+      <p class="small muted">The lead plays the lick (call), then is silent while the backing continues (response) and the notes are hidden. Turns Loop on.</p>
     </fieldset>
   </div>
 </dialog>

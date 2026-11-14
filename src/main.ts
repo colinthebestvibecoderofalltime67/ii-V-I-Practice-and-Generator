@@ -10,7 +10,8 @@ import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze'
 import { renderLick, type NoteLabel } from './render/notation';
 import { lickFingerings } from './render/tab';
 import { Player, type PassAction, type PlayOptions } from './audio/player';
-import { clampInt, drillKeys, drillStep, type DrillConfig, type DrillOrder } from './practice/drill';
+import { sessionStep, type SessionConfig } from './practice/session';
+import { clampInt, drillKeys, type DrillConfig, type DrillOrder } from './practice/drill';
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
 import { Library } from './ui/library';
@@ -158,9 +159,11 @@ function syncControls(): void {
   $<HTMLInputElement>('r-lead').value = String(settings.leadVolume);
   $<HTMLInputElement>('r-piano').value = String(settings.pianoVolume);
 
-  $('paper').classList.toggle('covered', settings.hide);
-  $('score').classList.toggle('hidden', settings.hide);
-  $('cover').setAttribute('aria-hidden', String(!settings.hide));
+  check('c-cr', settings.callResponse);
+  check('c-cr-show', settings.showNotesInResponse);
+  check('c-hide-keep', settings.hideKeepChords);
+  setRadio('cr-resp', String(settings.responsePasses));
+  syncCover();
   updateTransport();
   updateFav();
 }
@@ -273,7 +276,30 @@ function renderNotation(): void {
     romans: romansFor(lick.progressionId),
     activeBar: activeBar(),
     noteLabels: noteLabels(),
+    hideNotes: notesCovered() && settings.hideKeepChords,
   });
+}
+
+/* ---------------------------------------------------------------- hiding the notes (Hide notes + response passes) */
+
+/** True during a response pass whose notes are hidden (set by the session; see drillOnPassStart). */
+let responseHide = false;
+const notesCovered = (): boolean => settings.hide || responseHide;
+
+/** Cover the sheet (text overlay) or, with chord symbols kept, redraw it without notes. */
+function syncCover(): void {
+  const wholeCover = notesCovered() && !settings.hideKeepChords;
+  $('paper').classList.toggle('covered', wholeCover);
+  $('score').classList.toggle('hidden', wholeCover);
+  $('cover').setAttribute('aria-hidden', String(!wholeCover));
+  $('cover').textContent = responseHide ? 'Your turn. Play it back.' : 'Now play it from memory.';
+}
+
+function setResponseHide(on: boolean): void {
+  if (responseHide === on) return;
+  responseHide = on;
+  syncCover();
+  renderNotation();
 }
 
 /** Degree labels for the sheet when Analyze is on. */
@@ -401,7 +427,6 @@ function generate(): void {
     avoid: history.slice(0, RECENT_LICKS).flatMap(e => e.lick.fragmentIds),
     seed: randomSeed(),
   });
-  if (settings.hide) { settings.hide = false; persist(); syncControls(); }
   showLick(l, true);
 }
 
@@ -426,7 +451,7 @@ const PROGRAMS: Record<Instrument['timbre'], number> = { reed: 66, brass: 56, fl
 
 function playOptions(): PlayOptions {
   return {
-    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, loop: settings.loop || drillOn(), metronome: settings.metronome,
+    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, loop: settings.loop || drillOn() || settings.callResponse, metronome: settings.metronome,
     countIn: settings.countIn, piano: settings.piano, comp: settings.comp,
     leadVolume: settings.leadVolume, pianoVolume: settings.pianoVolume, timbre: inst().timbre,
   };
@@ -444,12 +469,12 @@ function startPlayback(): void {
       currentNote = cur ?? -1;
       const b = activeBar();
       if (b !== undefined && !drill) setStatus(`bar ${b + 1} / ${bars}`);
-      if (!settings.hide) renderNotation();
+      if (!(notesCovered() && !settings.hideKeepChords)) renderNotation();
     },
     onStatus: s => { if (/count/i.test(s)) setStatus(s.toLowerCase()); },
     onPass: run ? drillOnPass : undefined,
     onPassStart: run ? drillOnPassStart : undefined,
-    onEnd: () => { finishDrill(); highlight = []; setStatus(run ? 'Drill complete' : 'Ready'); updateTransport(); renderNotation(); },
+    onEnd: () => { finishDrill(); highlight = []; setStatus(run ? (drillOn() ? 'Drill complete' : 'Ready') : 'Ready'); updateTransport(); renderNotation(); },
   });
   updateTransport();
 }
@@ -457,9 +482,8 @@ function startPlayback(): void {
 /* ---------------------------------------------------------------- 12-key drill */
 
 interface DrillRun {
-  cfg: DrillConfig;
-  keys: number[];
-  startBpm: number;
+  /** The combined 12-key drill + call-and-response configuration (see practice/session.ts). */
+  session: SessionConfig;
   /** The lick every key is transposed from (never from an already-transposed copy). */
   base: Lick;
   /** History id of the lick on screen when the drill began; replaced by the lick shown at the end. */
@@ -469,15 +493,15 @@ let drill: DrillRun | null = null;
 
 const drillOn = (): boolean => settings.drillOrder !== 'off';
 
-/** Turn the settings into a run, or null when the drill is off. Loop is switched on for the user. */
+/** Turn the settings into a run, or null when neither the drill nor call and response is on. Loop is switched on. */
 function startDrill(): DrillRun | null {
-  if (!lick || !drillOn()) return null;
+  if (!lick || !(drillOn() || settings.callResponse)) return null;
   if (!settings.loop) { settings.loop = true; persist(); syncControls(); }
   const base = sourceLick && sourceLick.id === lick.id ? sourceLick : lick;
+  const cfg: DrillConfig = { order: settings.drillOrder, repeats: settings.drillRepeats, tempoStep: settings.drillTempoStep, maxBpm: settings.drillMaxBpm, tempoEvery: 'key' };
   drill = {
-    cfg: { order: settings.drillOrder, repeats: settings.drillRepeats, tempoStep: settings.drillTempoStep, maxBpm: settings.drillMaxBpm, tempoEvery: 'key' },
-    keys: drillKeys(lick.keyPc, settings.drillOrder, randomSeed()),
-    startBpm: effectiveBpm(),
+    session: { callResponse: settings.callResponse, responses: settings.responsePasses, drill: drillOn() ? cfg : null,
+      keys: drillOn() ? drillKeys(lick.keyPc, settings.drillOrder, randomSeed()) : [lick.keyPc], startBpm: effectiveBpm() },
     base,
     originalId: lick.id,
   };
@@ -488,31 +512,41 @@ function startDrill(): DrillRun | null {
 function drillOnPass(passIndex: number): PassAction | void {
   const d = drill;
   if (!d) return;
-  const st = drillStep(d.cfg, d.keys, d.startBpm, passIndex);
+  const st = sessionStep(d.session, passIndex);
   if (st.done) return { stop: true };
-  if (!st.keyChanged) return { bpm: st.bpm };
-  const l = transposeLick(d.base, st.key, concertRange(inst()), comfortFor(d.base));
-  return { lick: l, bpm: st.bpm };
+  const action: PassAction = { silentLead: st.silentLead };
+  if (st.bpm != null) action.bpm = st.bpm;
+  if (st.newKey != null) action.lick = transposeLick(d.base, st.newKey, concertRange(inst()), comfortFor(d.base));
+  return action;
 }
 
 /** Called by the player at the bar line itself: show what is now playing. */
 function drillOnPassStart(passIndex: number, info: { lick: Lick; bpm: number }): void {
   const d = drill;
   if (!d) return;
-  const st = drillStep(d.cfg, d.keys, d.startBpm, passIndex);
+  const st = sessionStep(d.session, passIndex);
   if (info.lick !== lick) {
     settings.key = info.lick.keyPc;
     persist();
     showLick(info.lick, false, undefined, true); // nothing goes to History until the drill stops
   }
-  const pass = d.cfg.repeats > 1 ? ` · pass ${st.repeat + 1}/${clampInt(d.cfg.repeats, 1, 4)}` : '';
-  setStatus(`Key ${st.keyIndex + 1}/${st.keyCount} · ${titleKeyLabel(info.lick, inst())} · ${info.bpm} BPM${pass}`);
+  setResponseHide(st.role === 'response' && !settings.showNotesInResponse);
+  const parts: string[] = [];
+  if (st.drill) {
+    const reps = clampInt(d.session.drill!.repeats, 1, 4);
+    parts.push(`Key ${st.drill.keyIndex + 1}/${st.drill.keyCount}`, titleKeyLabel(info.lick, inst()), `${info.bpm} BPM`);
+    if (reps > 1) parts.push(`pass ${st.drill.repeat + 1}/${reps}`);
+  }
+  if (d.session.callResponse) parts.push(st.role === 'response' ? 'Your turn' : 'Listen');
+  else if (!st.drill) parts.push(`${info.bpm} BPM`);
+  setStatus(parts.join(' · '));
 }
 
 /** End the drill: the lick on screen (the last key reached) replaces the starting lick in History. */
 function finishDrill(): void {
   const d = drill;
   drill = null;
+  setResponseHide(false);
   if (!d || !lick || lick.id === d.originalId) return;
   history = store.removeHistory(d.originalId);
   history = store.addHistory(lick);
@@ -705,7 +739,11 @@ function bind(): void {
   onCheck('c-loop', on => { setting('loop', on); restartIfPlaying(); });
   onCheck('c-swing', on => { setting('swing', on); restartIfPlaying(); });
   onCheck('c-straight16', on => { setting('straight16', on); restartIfPlaying(); });
-  onCheck('c-hide', on => { setting('hide', on); if (!on) renderNotation(); });
+  onCheck('c-hide', on => { setting('hide', on); renderNotation(); });
+  onCheck('c-hide-keep', on => { setting('hideKeepChords', on); renderNotation(); });
+  onCheck('c-cr', on => { setting('callResponse', on); restartIfPlaying(); });
+  onCheck('c-cr-show', on => { setting('showNotesInResponse', on); if (responseHide && on) setResponseHide(false); });
+  onRadio('cr-resp', v => { setting('responsePasses', v === '2' ? 2 : 1); restartIfPlaying(); });
   onCheck('c-tab', on => { setting('showTab', on); renderNotation(); });
   onCheck('c-fingers', on => { setting('showFingers', on); renderNotation(); });
   $<HTMLSelectElement>('sel-pos').addEventListener('change', e => {
@@ -788,7 +826,7 @@ function updateBar(): void {
   // No aria-pressed: the visible label itself announces Play / Pause / Resume.
   $('pb-key').textContent = lick ? titleKeyLabel(lick, inst()) : '–';
   const st = $('status').textContent ?? '';
-  $('pb-bar').textContent = /^bar /.test(st) ? st.replace(' / ', '/') : /count/.test(st) ? st.replace(/.*: ?/, 'count ') : st === 'Paused' ? 'paused' : lick ? lengthShort(lick.length) : '';
+  $('pb-bar').textContent = /Your turn$/.test(st) ? 'Your turn' : /Listen$/.test(st) ? 'Listen' : /^bar /.test(st) ? st.replace(' / ', '/') : /count/.test(st) ? st.replace(/.*: ?/, 'count ') : st === 'Paused' ? 'paused' : lick ? lengthShort(lick.length) : '';
   updateRecap();
 }
 

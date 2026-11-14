@@ -32,6 +32,15 @@ describe('storage', () => {
     expect(store.loadFavorites()).toEqual([]);
   });
 
+  it('call and response settings: defaults, round-trip, sanitizing', () => {
+    mem.setItem(KEYS.settings, JSON.stringify({ bpm: 150, hide: true }));
+    expect(store.loadSettings()).toMatchObject({ callResponse: false, responsePasses: 1, showNotesInResponse: false, hideKeepChords: true, hide: true });
+    store.saveSettings({ ...DEFAULT_SETTINGS, callResponse: true, responsePasses: 2, showNotesInResponse: true, hideKeepChords: false });
+    expect(store.loadSettings()).toMatchObject({ callResponse: true, responsePasses: 2, showNotesInResponse: true, hideKeepChords: false });
+    mem.setItem(KEYS.settings, JSON.stringify({ callResponse: 'yes', responsePasses: 3, showNotesInResponse: 1, hideKeepChords: null }));
+    expect(store.loadSettings()).toMatchObject({ callResponse: false, responsePasses: 1, showNotesInResponse: false, hideKeepChords: true });
+  });
+
   it('drill settings: defaults for old saved settings, round-trip, and sanitizing', () => {
     mem.setItem(KEYS.settings, JSON.stringify({ bpm: 150 }));
     expect(store.loadSettings()).toMatchObject({ bpm: 150, drillOrder: 'off', drillRepeats: 1, drillTempoStep: 0, drillMaxBpm: 200 });

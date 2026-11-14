@@ -39,6 +39,14 @@ export interface Settings {
   drillRepeats: number;
   drillTempoStep: number;
   drillMaxBpm: number;
+  /** Call and response: alternate a played lick (call) with a muted pass (response). */
+  callResponse: boolean;
+  /** Response passes after each call, 1 or 2. */
+  responsePasses: 1 | 2;
+  /** Keep the notes visible during the response pass (default: hidden). */
+  showNotesInResponse: boolean;
+  /** When Hide notes is on, keep the chord symbols readable. */
+  hideKeepChords: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -68,6 +76,10 @@ export const DEFAULT_SETTINGS: Settings = {
   drillRepeats: 1,
   drillTempoStep: 0,
   drillMaxBpm: 200,
+  callResponse: false,
+  responsePasses: 1,
+  showNotesInResponse: false,
+  hideKeepChords: true,
 };
 
 /** Old `tier` setting -> middle of that tier's slider band. */
@@ -156,6 +168,10 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (isNum(raw.drillRepeats)) s.drillRepeats = clampInt(raw.drillRepeats, 1, 4);
   if (isNum(raw.drillTempoStep)) s.drillTempoStep = clampInt(raw.drillTempoStep, 0, 20);
   if (isNum(raw.drillMaxBpm)) s.drillMaxBpm = clampInt(raw.drillMaxBpm, 40, 320);
+  if (raw.responsePasses === 1 || raw.responsePasses === 2) s.responsePasses = raw.responsePasses;
+  for (const k of ['callResponse', 'showNotesInResponse', 'hideKeepChords'] as const) {
+    if (isBool(raw[k])) s[k] = raw[k];
+  }
   for (const k of ['slow', 'piano', 'loop', 'swing', 'straight16', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking', 'analyze'] as const) {
     if (isBool(raw[k])) s[k] = raw[k];
   }

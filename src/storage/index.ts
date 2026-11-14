@@ -3,6 +3,7 @@ import { TICKS_PER_16TH } from '../types';
 import { LENGTHS, PROGRESSIONS } from '../theory/progressions';
 import { INSTRUMENTS } from '../instruments';
 import type { CompStyle } from '../audio/comping';
+import { lickContentKey, recordPass, sanitizePractice, type PracticeLog } from '../practice/log';
 import { DRILL_ORDERS, clampInt, type DrillOrder } from '../practice/drill';
 
 /** Persisted user settings. Everything here is a per-browser convenience. */
@@ -27,6 +28,11 @@ export interface Settings {
   pianoVolume: number;
   countIn: boolean;
   metronome: boolean;
+  /** Swing drums with the backing (only sound while Backing is on). */
+  drums: boolean;
+  drumVolume: number;
+  /** Metronome clicks only on beats 2 and 4. */
+  metronome24: boolean;
   midiBacking: boolean;
   /** Tab fingering: 'auto' (easiest) or a position label such as "Pos. V" / "Open pos.". */
   tabPosition: 'auto' | string;
@@ -68,6 +74,9 @@ export const DEFAULT_SETTINGS: Settings = {
   pianoVolume: 0.6,
   countIn: true,
   metronome: false,
+  drums: true,
+  drumVolume: 0.5,
+  metronome24: false,
   midiBacking: true,
   tabPosition: 'auto',
   showFingers: false,
@@ -97,6 +106,7 @@ export const KEYS = {
   settings: 'iivi:v1:settings',
   history: 'iivi:v1:history',
   favorites: 'iivi:v1:favorites',
+  practice: 'iivi:v1:practice',
 } as const;
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -162,6 +172,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (isNum(raw.bpm)) s.bpm = clamp(Math.round(raw.bpm), 40, 320);
   if (isNum(raw.leadVolume)) s.leadVolume = clamp(raw.leadVolume, 0, 1);
   if (isNum(raw.pianoVolume)) s.pianoVolume = clamp(raw.pianoVolume, 0, 1);
+  if (isNum(raw.drumVolume)) s.drumVolume = clamp(raw.drumVolume, 0, 1);
   if (raw.comp === 'rootless' || raw.comp === 'block' || raw.comp === 'sparse') s.comp = raw.comp;
   if (typeof raw.tabPosition === 'string' && (raw.tabPosition === 'auto' || TAB_POSITION_RE.test(raw.tabPosition))) s.tabPosition = raw.tabPosition;
   if (typeof raw.drillOrder === 'string' && (DRILL_ORDERS as readonly string[]).includes(raw.drillOrder)) s.drillOrder = raw.drillOrder as DrillOrder;
@@ -172,7 +183,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   for (const k of ['callResponse', 'showNotesInResponse', 'hideKeepChords'] as const) {
     if (isBool(raw[k])) s[k] = raw[k];
   }
-  for (const k of ['slow', 'piano', 'loop', 'swing', 'straight16', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking', 'analyze'] as const) {
+  for (const k of ['slow', 'piano', 'loop', 'swing', 'straight16', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'drums', 'metronome24', 'midiBacking', 'analyze'] as const) {
     if (isBool(raw[k])) s[k] = raw[k];
   }
   return s;
@@ -239,6 +250,15 @@ export class Store {
   /* settings */
   loadSettings(): Settings { return sanitizeSettings(this.read(KEYS.settings)); }
   saveSettings(s: Settings): void { this.write(KEYS.settings, s); }
+
+  /* practice log: per-lick stats keyed by lickContentKey */
+  loadPractice(): PracticeLog { return sanitizePractice(this.read(KEYS.practice)); }
+  /** Record one completed pass of `lick` (in its own key) at `bpm`. Returns the stored log; unchanged if the write fails. */
+  recordPractice(lick: Lick, bpm: number, at = Date.now()): PracticeLog {
+    const before = this.loadPractice();
+    const next = recordPass(before, lickContentKey(lick), lick.keyPc, bpm, at);
+    return this.write(KEYS.practice, next) ? next : before;
+  }
 
   /* history: newest first */
   loadHistory(): StoredEntry[] { return this.readEntries(KEYS.history, HISTORY_LIMIT); }

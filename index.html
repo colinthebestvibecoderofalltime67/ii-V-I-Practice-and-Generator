@@ -198,11 +198,18 @@
     </label>
     <label class="field"><span class="label">Lead volume</span><input type="range" id="r-lead" min="0" max="1" step="0.05"></label>
     <label class="field"><span class="label">Backing volume</span><input type="range" id="r-piano" min="0" max="1" step="0.05"></label>
+    <div class="field" id="drums-set">
+      <span class="label">Drums</span>
+      <label class="check"><input type="checkbox" id="c-drums"> Swing drums with the backing</label>
+      <label class="field sub"><span class="label">Drums volume</span><input type="range" id="r-drums" min="0" max="1" step="0.05" aria-label="Drums volume"></label>
+      <p class="small muted" id="drums-hint">Ride, hi-hat on 2 and 4, soft kick and ghosted snare. Plays while Backing is on, not during the count-in.</p>
+    </div>
     <div class="field">
       <span class="label">Practice</span>
       <label class="check"><input type="checkbox" id="c-slow"> Slow practice (60% of tempo)</label>
       <label class="check"><input type="checkbox" id="c-count"> Count-in</label>
       <label class="check"><input type="checkbox" id="c-met"> Metronome</label>
+      <label class="check"><input type="checkbox" id="c-met24"> Metronome on 2 and 4 only</label>
       <label class="check"><input type="checkbox" id="c-midi"> Include backing in MIDI export</label>
     </div>
     <!-- 12-key drill (C1) -->

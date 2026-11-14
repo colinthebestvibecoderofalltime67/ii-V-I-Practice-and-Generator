@@ -72,7 +72,7 @@ describe('lickToMidi', () => {
     const p = parse(lickToMidi(lick, opts));
     expect(p.format).toBe(1);
     expect(p.division).toBe(480);
-    expect(p.ntrks).toBe(4);
+    expect(p.ntrks).toBe(5);
     const tempo = p.tracks[0].find(e => e.meta === 0x51)!;
     expect(tempo.data).toEqual([0x07, 0xa1, 0x20]); // 500000 us
     expect(p.tracks[0].find(e => e.meta === 0x58)!.data!.slice(0, 2)).toEqual([4, 2]);
@@ -80,7 +80,28 @@ describe('lickToMidi', () => {
   });
 
   it('has only the lead track when not comping', () => {
-    expect(parse(lickToMidi(lick, { ...opts, comping: false })).ntrks).toBe(2);
+    expect(parse(lickToMidi(lick, { ...opts, comping: false })).ntrks).toBe(2); // no drums either
+  });
+
+  it('can leave the drums out', () => {
+    expect(parse(lickToMidi(lick, { ...opts, drums: false })).ntrks).toBe(4);
+  });
+
+  it('writes a drum track on channel 10 (index 9) on the swung grid', () => {
+    const p = parse(lickToMidi(lick, { ...opts, swing: true, straight16: true }));
+    const d = p.tracks[4];
+    const on = ons(d);
+    expect(on.length).toBeGreaterThan(0);
+    expect(on.every(e => (e.status & 15) === 9)).toBe(true);
+    const notes = new Set(on.map(e => e.d1));
+    expect([...notes].every(n => [36, 38, 44, 51].includes(n!))).toBe(true);
+    expect(notes.has(51) && notes.has(44) && notes.has(36)).toBe(true);
+    expect(ons(d).length).toBe(offs(d).length);
+    // ride: beats at multiples of 480, plus the swung "and" of 2 and 4 at +320
+    const ride = on.filter(e => e.d1 === 51).map(e => e.t);
+    expect(ride.slice(0, 6)).toEqual([0, 480, 800, 960, 1440, 1760]);
+    // hi-hat on 2 and 4 only
+    expect(on.filter(e => e.d1 === 44).map(e => e.t).slice(0, 2)).toEqual([480, 1440]);
   });
 
   it('balances note-ons/offs and counts merged lead notes', () => {

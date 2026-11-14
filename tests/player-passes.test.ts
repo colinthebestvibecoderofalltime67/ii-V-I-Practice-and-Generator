@@ -6,6 +6,7 @@ vi.mock('../src/audio/synth', () => ({
   click: (_c: unknown, _o: unknown, t: number) => { calls.click.push(t); },
   piano: (_c: unknown, _o: unknown, _m: number, t: number) => { calls.piano.push(t); },
   bass: () => undefined,
+  drum: () => undefined,
 }));
 
 import { Player, applyPassAction, type PassInfo, type PlayOptions } from '../src/audio/player';

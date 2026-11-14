@@ -388,7 +388,7 @@ dialog::backdrop { background: rgba(20, 20, 18, .35); }
 .lib-load .l3 { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; margin-top: 2px; color: var(--muted); font-size: 12.5px; }
 .lib-load .l3 .mono { color: var(--muted-2); font-size: 12px; }
 .wheel { flex: none; display: block; }
-.wheel circle { fill: none; stroke: var(--field); stroke-width: 1; }
+.wheel circle { fill: none; stroke: var(--muted); stroke-width: 1; } /* empty dots: ≥ 3:1 against the page in both themes */
 .wheel circle.on { fill: var(--accent); stroke: var(--accent); }
 .lib-daily { background: var(--hover); border-top: 0; border-bottom: 1px solid var(--rule); margin-bottom: 4px; }
 .lib-daily .lib-load:hover { background: var(--field-bg); }

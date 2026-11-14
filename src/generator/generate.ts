@@ -913,7 +913,8 @@ export function generateLick(opts: GenerateOptions): Lick {
     if (target !== undefined) {
       const mid = [...roundScores].sort((a, b) => a - b)[roundScores.length >> 1];
       if (mid > target + tol) {
-        if (level <= 1 && round >= FLOOR_AFTER_ROUND) break;
+        // stop early only once the best candidate is inside the target tier (dist < 1000)
+        if (level <= 1 && round >= FLOOR_AFTER_ROUND && best && best.dist - best.pref < 1000) break;
         level = Math.max(1, level - 0.4);
       }
       else if (mid < target - tol) level = Math.min(4, level + 0.4);

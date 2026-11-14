@@ -497,7 +497,11 @@ function startPlayback(keepDrill = false): void {
       if (!(notesCovered() && !settings.hideKeepChords)) renderNotation();
     },
     onStatus: s => { if (/count/i.test(s)) setStatus(s.toLowerCase()); },
-    onPassEnd: (_i, info) => { practice = store.recordPractice(info.lick, info.bpm); },
+    // In call and response the player plays on the response (silent-lead) passes; the call pass is listening.
+    onPassEnd: (_i, info) => {
+      if (settings.callResponse && !info.silentLead) return;
+      practice = store.recordPractice(info.lick, info.bpm);
+    },
     onPass: run ? drillOnPass : undefined,
     onPassStart: run ? drillOnPassStart : undefined,
     onEnd: () => { finishDrill(); highlight = []; setStatus(run?.session.drill ? 'Drill complete' : 'Ready'); updateTransport(); renderNotation(); },
@@ -754,20 +758,32 @@ function setupDialog(id: string, openerId: string): HTMLDialogElement {
 let dailyGenerated: { key: string; lick: Lick } | null = null;
 
 /** A saved lick picked by the date, or (nothing saved) a lick generated from a seed fixed for the day. */
+const DAILY_KEY = 'iivi:v1:daily';
+
+/**
+ * A saved lick picked by the date, or (nothing saved) a lick generated from a seed fixed for the day. The day's pick is
+ * remembered, so saving or removing other licks doesn't change it mid-day; the generated one is the same lick on every
+ * instrument (generated in a fixed concert range, then fitted).
+ */
 function getLickOfDay(): { lick: Lick; saved: boolean } | null {
   const now = Date.now();
-  const saved = pickForDay([...favorites].sort((a, b) => (a.lick.id < b.lick.id ? -1 : 1)), now);
-  if (saved) return { lick: saved.lick, saved: true };
   const day = dayNumber(now);
+  let remembered: { day: number; id: string } | null = null;
+  try { remembered = JSON.parse(localStorage.getItem(DAILY_KEY) ?? 'null'); } catch { /* storage unavailable */ }
+  const kept = remembered && remembered.day === day ? favorites.find(f => f.lick.id === remembered!.id) : undefined;
+  const saved = kept ?? pickForDay([...favorites].sort((a, b) => (a.lick.id < b.lick.id ? -1 : 1)), now);
+  if (saved) {
+    if (!kept) try { localStorage.setItem(DAILY_KEY, JSON.stringify({ day, id: saved.lick.id })); } catch { /* ignore */ }
+    return { lick: saved.lick, saved: true };
+  }
   const key = `${day}:${settings.instrumentId}`;
   if (dailyGenerated?.key !== key) {
-    dailyGenerated = {
-      key,
-      lick: generateLick({
-        progressionId: 'major-251', length: 'standard', keyPc: day % 12, tier: 2,
-        range: concertRange(inst()), comfortRange: concertRangeForLevel(inst(), 2), seed: 1_000_003 + day,
-      }),
-    };
+    const alto = getInstrument('alto');
+    const base = generateLick({
+      progressionId: 'major-251', length: 'standard', keyPc: day % 12, tier: 2,
+      range: concertRange(alto), comfortRange: concertRangeForLevel(alto, 2), seed: 1_000_003 + day,
+    });
+    dailyGenerated = { key, lick: transposeLick(base, base.keyPc, concertRange(inst()), concertRangeForLevel(inst(), 2)) };
   }
   return { lick: dailyGenerated.lick, saved: false };
 }

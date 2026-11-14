@@ -50,7 +50,9 @@ export function sanitizePractice(raw: unknown): PracticeLog {
     const keys = [...new Set(e.keys.filter((x): x is number => isNum(x) && Number.isInteger(x) && x >= 0 && x < 12))].sort((a, b) => a - b);
     const passes = Math.max(0, Math.round(e.passes));
     if (!keys.length || !passes) continue;
-    entries.push([k, { keys, passes, topBpm: Math.min(320, Math.max(0, Math.round(e.topBpm))), lastAt: e.lastAt }]);
+    // a real date between the epoch and tomorrow; corrupted or future timestamps would show "Invalid Date" or never be evicted
+    const lastAt = Math.min(Date.now() + 86_400_000, Math.max(0, e.lastAt));
+    entries.push([k, { keys, passes, topBpm: Math.min(320, Math.max(0, Math.round(e.topBpm))), lastAt }]);
   }
   entries.sort((a, b) => b[1].lastAt - a[1].lastAt);
   for (const [k, v] of entries.slice(0, PRACTICE_LIMIT)) out[k] = v;
@@ -73,9 +75,10 @@ export function recordPass(log: PracticeLog, contentKey: string, keyPc: number, 
   };
   const ks = Object.keys(next);
   if (ks.length <= PRACTICE_LIMIT) return next;
-  ks.sort((a, b) => next[b].lastAt - next[a].lastAt);
-  const kept: PracticeLog = {};
-  for (const k of ks.slice(0, PRACTICE_LIMIT)) kept[k] = next[k];
+  // evict the oldest, but always keep the entry just recorded (a clock moved backwards must not drop it)
+  const others = ks.filter(k => k !== contentKey).sort((a, b) => next[b].lastAt - next[a].lastAt);
+  const kept: PracticeLog = { [contentKey]: next[contentKey] };
+  for (const k of others.slice(0, PRACTICE_LIMIT - 1)) kept[k] = next[k];
   return kept;
 }
 

@@ -36,3 +36,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: SWEEP=full npm test
+      - run: npm run build

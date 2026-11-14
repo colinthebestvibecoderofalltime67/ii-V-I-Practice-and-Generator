@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "mine": "tsx scripts/mine-prototype.ts",
-    "report": "tsx scripts/report.ts"
+    "report": "tsx scripts/report.ts",
+    "musicality": "tsx scripts/musicality.ts"
   },
   "dependencies": {
     "jspdf": "^4.2.1",

@@ -329,7 +329,7 @@ function repeatsBeat(events: Ev[], i: number, dropsPrev: boolean, chordStart: nu
   return a.includes(',') && a === b;
 }
 
-const ANTIC_BY_LEVEL = [0.07, 0.42, 0.6, 0.5];
+const ANTIC_BY_LEVEL = [0.07, 0.36, 0.6, 0.5];
 const lerp4 = (t: readonly number[], level: number): number => {
   const x = Math.min(3, Math.max(0, level - 1));
   const i = Math.min(2, Math.floor(x));

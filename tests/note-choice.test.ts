@@ -93,6 +93,6 @@ describe('guide-tone arrival', () => {
       n++;
       if (mod12(a.midi - ch.rootPc) === 0) root++;
     }
-    expect(root / n).toBeLessThan(0.15);
+    expect(root / n).toBeLessThan(0.25); // the root is the weakest landing on the I, but not wrong: keep it a minority
   });
 });

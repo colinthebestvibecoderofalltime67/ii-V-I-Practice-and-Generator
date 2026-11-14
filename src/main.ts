@@ -24,6 +24,8 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
 const store = new Store();
 const settings: Settings = store.loadSettings();
 let history: StoredEntry[] = store.loadHistory();
+/** New licks avoid the cells of the last few licks, so a practice session keeps hearing new figures. */
+const RECENT_LICKS = 8;
 let favorites: StoredEntry[] = store.loadFavorites();
 let lick: Lick | null = null;
 /** The lick as generated or loaded, before any refit. Refits always start from it, so folding notes into a
@@ -385,6 +387,7 @@ function generate(): void {
     targetScore: posToScore(settings.target),
     range: concertRange(inst()),
     comfortRange: concertRangeForLevel(inst(), targetTier()),
+    avoid: history.slice(0, RECENT_LICKS).flatMap(e => e.lick.fragmentIds),
     seed: randomSeed(),
   });
   if (settings.hide) { settings.hide = false; persist(); syncControls(); }

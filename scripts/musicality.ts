@@ -1,7 +1,8 @@
 /**
  * `npm run musicality`: generate a fixed, seeded sample of licks and print the musicality metrics
  * (src/analysis/musicality.ts) overall and per tier. `JSON=1` prints JSON instead (for before/after diffs).
- * Sample: every progression x length x slider position (5..95 step 10) x seeds, on alto sax and guitar.
+ * Sample: every progression x length x slider position (5..95 step 10) x seeds, on alto sax and guitar. Like the app,
+ * each lick avoids the cells of the previous 8 licks (a practice session).
  */
 import { generateLick } from '../src/generator';
 import { posToScore, tierForScore } from '../src/difficulty/score';
@@ -22,7 +23,7 @@ for (const p of PROGRESSIONS) {
     for (const pos of POSITIONS) {
       for (let s = 0; s < SEEDS; s++) {
         const inst = INSTS[s % INSTS.length];
-        const l = generateLick({ progressionId: p.id, length, keyPc: (seed * 5) % 12, tier: 1, targetScore: posToScore(pos), range: concertRange(inst), comfortRange: concertRangeForLevel(inst, tierForScore(posToScore(pos))), seed: seed++ });
+        const l = generateLick({ progressionId: p.id, length, keyPc: (seed * 5) % 12, tier: 1, targetScore: posToScore(pos), range: concertRange(inst), comfortRange: concertRangeForLevel(inst, tierForScore(posToScore(pos))), avoid: all.slice(-8).flatMap(r => r.fragmentIds), seed: seed++ });
         all.push(l);
         byTier[l.requestedTier].push(l);
       }

@@ -26,6 +26,11 @@ export interface GenerateOptions {
    * `range` stays the hard limit; the comfort range steers octave choice and candidate ranking. Clamped to `range`.
    */
   comfortRange?: [number, number];
+  /**
+   * Fragment ids heard recently (e.g. in the last few licks of a practice session). They are strongly down-weighted so
+   * consecutive licks don't keep reusing the same figure. Optional; doesn't change output when empty.
+   */
+  avoid?: readonly string[];
   /** default: random */
   seed?: number;
   /** default: FRAGMENTS */
@@ -226,6 +231,7 @@ function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
 
 function buildPlan(
   rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number, tier: Tier,
+  avoid?: ReadonlySet<string>,
 ): PlanItem[] {
   const plan: PlanItem[] = [];
   let beat = 0;
@@ -251,6 +257,7 @@ function buildPlan(
         let w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
         w *= tripletFactor(f, level, tier);
         if (f.id === prevId) w *= 0.05;
+        if (avoid?.has(f.id)) w *= 0.05;
         else if (prevSig && (fragSig(f).rels === prevSig.rels || fragSig(f).shape === prevSig.shape)) w *= 0.12;
         if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
         if (seqCells > 0 && f.tags.includes('sequence')) w *= 0.002; // one sequence per lick
@@ -481,6 +488,7 @@ export function generateLick(opts: GenerateOptions): Lick {
     : opts.range;
   const fitRange = comfort[1] - comfort[0] >= 14 ? comfort : opts.range;
   const pools = makePools(opts.fragments ?? FRAGMENTS);
+  const avoidSet = opts.avoid?.length ? new Set(opts.avoid) : undefined;
   const rng = new Rng(seed);
   // Lydian-dominant chords (tritone-sub bII7, backdoor bVII7): the natural 11 is an avoid note there
   const lydian = def.slots.map(sl => sl.roman === '♭II7' || sl.roman === '♭VII7');
@@ -493,7 +501,7 @@ export function generateLick(opts: GenerateOptions): Lick {
     const sharp = 1 + round * 0.8;
     const roundScores: number[] = [];
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier);
+      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier, avoidSet);
       const octaves = chooseOctaves(plan, chords, fitRange);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range) + fixLeaps(events, opts.range);

@@ -32,6 +32,11 @@ export interface RenderOptions {
   romans?: string[];
   /** Bar index (0-based) to tint as "now playing"; ignored in print mode. */
   activeBar?: number;
+  /**
+   * Draw the staves, bar lines and chord symbols but hide every note, rest, beam, tie, tab number and label (they are
+   * kept in the SVG inside `g[class*="hidden-notes"]` with visibility hidden, so the layout does not change).
+   */
+  hideNotes?: boolean;
   /** Fill for the active-bar tint. Default: a faint blue. */
   activeBarColor?: string;
 }
@@ -584,6 +589,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
         const lead = g.idx.map(k => B.notes[k]).find(n => !n.isRest());
         B.tuplets[gi].setTupletLocation(lead && lead.getStemDirection() < 0 ? Tuplet.LOCATION_BOTTOM : Tuplet.LOCATION_TOP);
       });
+      ctx.openGroup('hidden-notes');
       B.voice.draw(ctx, st);
       const drawBeams = (bms: Beam[], ns: StaveNote[]): void => bms.forEach(bm => {
         const bn = bm.getNotes();
@@ -604,6 +610,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
       if (hasLabels) drawLabels(B, b, si, topLineY + staffH + belowStaff);
       B.notes.forEach((n, i) => drawnNotes.set(pieceBase[b] + i, n));
       B.tabNotes.forEach((n, i) => drawnTab.set(pieceBase[b] + i, n));
+      ctx.closeGroup();
 
       // chord symbols
       ctx.save();
@@ -635,6 +642,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   // ties (drawn after all notes so we know every position)
   const globalPieces = bars.flatMap(B => B.pieces);
   const sysOfPiece = bars.flatMap((B, b) => B.pieces.map(() => sysOfBar[b]));
+  ctx.openGroup('hidden-notes');
   for (let i = 0; i < globalPieces.length; i++) {
     const p = globalPieces[i];
     if (!p.tieNext || i + 1 >= globalPieces.length) continue;
@@ -651,7 +659,9 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
       draw(null, c);
     }
   }
+  ctx.closeGroup();
   void drawnTab;
+  if (opts.hideNotes) svg.querySelectorAll('g[class*="hidden-notes"]').forEach(g => g.setAttribute('visibility', 'hidden'));
 
   // ---------- finalise ----------
   svg.setAttribute('class', 'lick-svg');

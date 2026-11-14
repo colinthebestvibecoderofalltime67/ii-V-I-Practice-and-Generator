@@ -312,6 +312,8 @@ export interface PhrasingOptions {
   level: number;
   /** Per chord: a Lydian dominant (tritone-sub / backdoor V), whose scale has the #11, not the natural 11. */
   lydian?: boolean[];
+  /** Always try to anticipate the final chord (the Focus "anticipate the I"). The usual conditions still apply. */
+  anticipateLast?: boolean;
 }
 
 const LYDIAN_DOM_SCALE = [0, 2, 4, 6, 7, 9, 10];
@@ -366,7 +368,7 @@ export function phraseEvents(
   const pAnt = lerp4(ANTIC_BY_LEVEL, opts.level);
   for (let ci = 1; ci < chords.length; ci++) {
     const c = chords[ci];
-    const p = Math.min(0.95, pAnt * (ci === chords.length - 1 ? 1.2 : 0.85));
+    const p = opts.anticipateLast && ci === chords.length - 1 ? 1 : Math.min(0.95, pAnt * (ci === chords.length - 1 ? 1.2 : 0.85));
     if (!rng.chance(p)) continue;
     const i = events.findIndex(e => e.start === c.start);
     if (i < 1) continue;

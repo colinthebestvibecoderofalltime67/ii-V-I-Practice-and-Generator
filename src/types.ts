@@ -61,7 +61,28 @@ export type FragTag =
   | 'pentatonic'
   | 'guide-tone'
   | 'sequence'
-  | 'motif';
+  | 'motif'
+  /** Two triads a whole step apart, alternated (src/theory/devices.ts detects the pairs from the notes). */
+  | 'triad-pair'
+  /** Barry Harris 6th-diminished scale line over maj7 / m6. */
+  | 'sixth-dim'
+  /** A different ii-V (or a tritone-sub / half-step side-slip figure) played over one chord. */
+  | 'superimposition'
+  /** First note is a chord tone that can sound early over the previous chord (tied-over anticipation into the I). */
+  | 'anticipation-target';
+
+/**
+ * A "Focus" concept the player can practise (see src/theory/devices.ts for how each is found in the notes).
+ * Beginner+: guideTones, enclosures, chromaticApproach, anticipateI. Advanced+: triadPairs, sixthDim, superimposition.
+ */
+export type ConceptId =
+  | 'guideTones'
+  | 'enclosures'
+  | 'chromaticApproach'
+  | 'anticipateI'
+  | 'triadPairs'
+  | 'sixthDim'
+  | 'superimposition';
 
 export interface Fragment {
   /** Unique, stable id, e.g. "m7-proto-03a" or "dom7alt-orig-12". */
@@ -76,6 +97,11 @@ export interface Fragment {
   level: Tier;
   /** True if it ends with a sustained resolution and can close a lick (used for the final I chord). */
   ending?: boolean;
+  /**
+   * A cell written for one Focus concept (src/theory/devices.ts). It is offered only while that Focus is on, so lick generation
+   * without a Focus draws from exactly the pool it always had.
+   */
+  concept?: ConceptId;
   source: 'prototype' | 'original';
 }
 
@@ -157,6 +183,8 @@ export interface Lick {
   notes: LickNote[];
   totalTicks: number;
   fragmentIds: string[];
+  /** The Focus concept this lick was generated for (absent when none, or when it was not allowed at the lick's tier). */
+  focus?: ConceptId;
   /** Tick where each melodic cell (fragment) starts, parallel to fragmentIds. Optional: older saved licks lack it. */
   cellStarts?: number[];
   difficulty: DifficultyResult;

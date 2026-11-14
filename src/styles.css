@@ -193,6 +193,10 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .an-sym { font-weight: 600; font-size: 15px; }
 .an-rom { font: 400 12px var(--mono); color: var(--muted); }
 .an-scale { color: var(--muted-2); }
+.an-devs { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.an-devs li { color: var(--ink); }
+.an-devs .dv-k { font-weight: 600; }
+.an-devs .dv-w { color: var(--muted-2); font-family: var(--mono); font-size: 12px; margin-left: 6px; }
 .an-notes { font: 400 13px var(--mono); color: var(--ink); display: flex; flex-wrap: wrap; gap: 0 10px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; list-style: none; margin: 0; padding: 0; color: var(--muted-2); }
 .legend .mono { font-weight: 500; margin-right: 4px; }

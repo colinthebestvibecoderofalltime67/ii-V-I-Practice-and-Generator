@@ -4,8 +4,9 @@
  * Sample: every progression x length x slider position (5..95 step 10) x seeds, on alto sax and guitar. Like the app,
  * each lick avoids the cells of the previous 8 licks (a practice session).
  */
-import { summarize, type MusicalitySummary } from '../src/analysis/musicality';
-import { sessionSample } from '../tests/_samples';
+import { conceptHitRate, sliderError, summarize, type MusicalitySummary } from '../src/analysis/musicality';
+import { CONCEPTS, CONCEPT_MIN_TIER, CONCEPT_NAME } from '../src/theory/devices';
+import { conceptSample, sessionSample } from '../tests/_samples';
 import { TIER_NAMES, type Tier } from '../src/types';
 
 // The same builder as the tests (tests/_samples.ts), so the report and the tests cannot drift apart.
@@ -13,8 +14,14 @@ const { all, byTier } = sessionSample({ seeds: Number(process.env.SEEDS ?? 6) })
 
 const rows: [string, MusicalitySummary][] = [['All', summarize(all)], ...([1, 2, 3, 4] as Tier[]).map(t => [TIER_NAMES[t], summarize(byTier[t])] as [string, MusicalitySummary])];
 
+// Focus concepts: share of licks generated with each concept that really contain it, per tier, and the slider error with / without it.
+const focusRows = CONCEPTS.flatMap(c => ([1, 2, 3, 4] as Tier[]).filter(t => t >= CONCEPT_MIN_TIER[c]).map(t => {
+  const licks = conceptSample(c, t, Number(process.env.FOCUS_SEEDS ?? 3));
+  return { concept: c, tier: t, ...conceptHitRate(licks, c), mae: sliderError(licks), baseMae: sliderError(conceptSample(undefined, t, Number(process.env.FOCUS_SEEDS ?? 3))) };
+}));
+
 if (process.env.JSON) {
-  console.log(JSON.stringify(Object.fromEntries(rows), null, 2));
+  console.log(JSON.stringify({ ...Object.fromEntries(rows), focus: focusRows }, null, 2));
 } else {
   const pct = (x: number) => `${(100 * x).toFixed(0)}%`.padStart(6);
   const num = (x: number) => x.toFixed(1).padStart(6);
@@ -42,4 +49,7 @@ if (process.env.JSON) {
   console.log('(m7b5/7alt/Lydian dom); altThin = 7alt with <2 altered tones and none held; m7b5-b5 = m7b5 chords stating the b5;');
   console.log('nearDup = adjacent cells sharing first 3 / last 2 pitches; ending = closing-note degree shares.');
   console.log('lyd-11 = tritone/backdoor licks stressing the natural 11 on the dominant; endRepeat = last note repeats the one before.');
+  console.log('\nFocus concept hit rate (licks generated with the focus whose notes contain it; guide tones = share of chord changes linked)');
+  console.log('Concept                       Tier           licks   hit  slider MAE (no focus)');
+  for (const r of focusRows) console.log(`${CONCEPT_NAME[r.concept].padEnd(29)} ${TIER_NAMES[r.tier].padEnd(12)} ${String(r.licks).padStart(6)} ${pct(r.rate)}   ${r.mae.toFixed(2)} (${r.baseMae.toFixed(2)})`);
 }

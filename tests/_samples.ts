@@ -15,7 +15,7 @@ import { generateLick } from '../src/generator';
 import { posToScore, tierForScore } from '../src/difficulty/score';
 import { concertRange, concertRangeForLevel, getInstrument } from '../src/instruments';
 import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
-import type { LengthId, Lick, Tier } from '../src/types';
+import type { ConceptId, LengthId, Lick, Tier } from '../src/types';
 
 /** `SWEEP=full` restores the exhaustive sweep sizes. */
 export const FULL_SWEEP = typeof process !== 'undefined' && process.env.SWEEP === 'full';
@@ -85,4 +85,32 @@ export function lazy<T>(build: () => T): () => T {
     if (!built) { v = build(); built = true; }
     return v as T;
   };
+}
+
+const conceptCache = new Map<string, Lick[]>();
+
+/**
+ * Licks generated with a Focus concept (or none) for one tier: every progression x short/standard x `seeds`, aimed at the middle
+ * of the tier's slider range, alto sax. Memoised. The same seeds with and without a concept, so accuracy is comparable.
+ */
+export function conceptSample(concept: ConceptId | undefined, tier: Tier, seeds = 2): Lick[] {
+  const key = `${concept ?? '-'}|${tier}|${seeds}`;
+  const hit = conceptCache.get(key);
+  if (hit) return hit;
+  const inst = getInstrument('alto');
+  const out: Lick[] = [];
+  const target = posToScore(tier * 25 - 12.5);
+  let n = 0;
+  for (const p of PROGRESSIONS) {
+    for (const length of ['short', 'standard'] as const) {
+      for (let s = 0; s < seeds; s++) {
+        out.push(generateLick({
+          progressionId: p.id, length, keyPc: (s * 5 + n) % 12, tier, targetScore: target, range: concertRange(inst),
+          comfortRange: concertRangeForLevel(inst, tierForScore(target)), seed: 100 + s * 7 + n++, ...(concept ? { concept } : {}),
+        }));
+      }
+    }
+  }
+  conceptCache.set(key, out);
+  return out;
 }

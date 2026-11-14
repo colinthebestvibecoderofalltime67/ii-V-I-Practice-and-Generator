@@ -1,8 +1,9 @@
-import type { LengthId, Lick, LickNote, Tier } from './types';
+import type { ConceptId, LengthId, Lick, LickNote, Tier } from './types';
 import { RENDERABLE_DURS, TPBAR, TRIPLET_DURS } from './types';
 import { LENGTHS, PROGRESSIONS, expandProgression, totalTicks } from './theory/progressions';
 import { findTupletGroups } from './theory/rhythm';
 import { scoreLick } from './difficulty/score';
+import { CONCEPTS } from './theory/devices';
 
 /**
  * Shareable lick links. A lick is packed into a few dozen bytes and written as base64url, so it can live in a URL
@@ -10,17 +11,18 @@ import { scoreLick } from './difficulty/score';
  * working after the generator changes. Everything else (chords, mode, tick positions, chord index per note,
  * difficulty) is derived on decode. Cell/fragment ids are not stored (analysis and rendering work without them).
  *
- * Binary layout (versions 1 and 2; they differ only in the duration table, see DURS):
+ * Binary layout (versions 1, 2 and 3; 1 and 2 differ only in the duration table, see DURS; 3 adds the Focus byte below):
  *   byte 0   version (high 4 bits) | length index (2 bits) | requestedTier - 1 (2 bits)
  *   byte 1   progression index in PROGRESSIONS (high 4 bits, so the registry is append-only) | keyPc (low 4 bits)
  *   byte 2   targetScore: 0 = none, else round(score * 2) + 1
+ *   byte 3   (version 3 only) Focus concept: 0 = none, else 1 + index into CONCEPTS (append-only)
  *   then one record per note until the notes fill the lick (the total length is implied by progression + length):
  *     byte   duration code (low 4 bits, index into DURS) | 0x10 tie to next | 0x20 rest
  *     varint zigzag(pitch - previous pitch)   (omitted for rests and for the note after a tie, which repeats its
  *                                              pitch; the first pitch is relative to 60)
  * Pitches are CONCERT MIDI.
  */
-export const SHARE_VERSION = 2;
+export const SHARE_VERSION = 3;
 export const SHARE_PARAM = 'l';
 
 /**
@@ -29,7 +31,7 @@ export const SHARE_PARAM = 'l';
  */
 const DURS_V1 = [2, 3, 4, 6, 8, 9, 12, 18, 24, 36, 48];
 const DURS_V2 = [...DURS_V1, 16];
-const DURS_BY_VERSION: Record<number, readonly number[]> = { 1: DURS_V1, 2: DURS_V2 };
+const DURS_BY_VERSION: Record<number, readonly number[]> = { 1: DURS_V1, 2: DURS_V2, 3: DURS_V2 };
 const DURS = DURS_V2;
 // Everything the generator can emit must be encodable: renderable values, triplet units and their 2-unit forms.
 if (![...RENDERABLE_DURS, ...TRIPLET_DURS, ...TRIPLET_DURS.map(d => 2 * d)].every(d => DURS.includes(d))) throw new Error('share: DURS table is missing a duration');
@@ -66,6 +68,7 @@ export function encodeLick(lick: Lick): string {
     (SHARE_VERSION << 4) | (li << 2) | (lick.requestedTier - 1),
     (pi << 4) | (((lick.keyPc % 12) + 12) % 12),
     lick.targetScore === undefined ? 0 : Math.min(255, Math.max(0, Math.round(lick.targetScore * 2)) + 1),
+    lick.focus ? CONCEPTS.indexOf(lick.focus) + 1 : 0,
   ];
   let prev = 60;
   let tiedFrom = false;
@@ -87,9 +90,16 @@ export function encodeLick(lick: Lick): string {
 /** Decode and validate a share code. Returns null for anything that is not a well-formed lick. */
 export function decodeLick(code: string): Lick | null {
   const b = fromBase64Url(code);
-  if (!b || b.length < 4 || b.length > 3 + 4 * MAX_NOTES) return null;
-  const durs = DURS_BY_VERSION[b[0] >> 4];
+  if (!b || b.length < 4 || b.length > 4 + 4 * MAX_NOTES) return null;
+  const version = b[0] >> 4;
+  const durs = DURS_BY_VERSION[version];
   if (!durs) return null;
+  const head = version >= 3 ? 4 : 3; // bytes before the first note record
+  let focus: ConceptId | undefined;
+  if (version >= 3) {
+    if (b[3] > CONCEPTS.length) return null;
+    if (b[3] > 0) focus = CONCEPTS[b[3] - 1];
+  }
   const length = LENGTH_IDS[(b[0] >> 2) & 3];
   const tier = ((b[0] & 3) + 1) as Tier;
   const def = PROGRESSIONS[b[1] >> 4];
@@ -101,7 +111,7 @@ export function decodeLick(code: string): Lick | null {
   const total = totalTicks(length);
   const notes: LickNote[] = [];
   const chords = expandProgression(def, length, keyPc);
-  let i = 3;
+  let i = head;
   let t = 0;
   let prev = 60;
   let tiedFrom = false;
@@ -161,6 +171,7 @@ export function decodeLick(code: string): Lick | null {
     notes,
     totalTicks: total,
     fragmentIds: [],
+    ...(focus ? { focus } : {}),
     difficulty: scoreLick(notes, chords, def),
     createdAt: Date.now(),
   };

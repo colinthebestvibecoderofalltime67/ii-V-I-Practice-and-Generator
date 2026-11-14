@@ -21,7 +21,7 @@ export function sanitizeSvgText(svg: Element): void {
 /** Render the lick to an A4 portrait PDF and trigger a download. `opts.showTab` defaults to "the instrument has a tab". jsPDF and svg2pdf load on demand. */
 export async function exportPdf(
   lick: Lick, inst: Instrument,
-  opts: Pick<RenderOptions, 'showTab' | 'tabPosition' | 'showFingers' | 'noteLabels'> = {},
+  opts: Pick<RenderOptions, 'showTab' | 'tabPosition' | 'showFingers' | 'noteLabels' | 'devices'> = {},
 ): Promise<void> {
   const [{ jsPDF }, svg2pdfMod] = await Promise.all([import('jspdf'), import('svg2pdf.js')]);
   const svg2pdf = svg2pdfMod.svg2pdf;

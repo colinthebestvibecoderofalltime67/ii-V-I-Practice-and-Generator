@@ -1,6 +1,7 @@
-import type { Lick } from '../types';
+import type { ConceptId, Lick } from '../types';
 import { TICKS_PER_16TH } from '../types';
 import { LENGTHS, PROGRESSIONS } from '../theory/progressions';
+import { isConceptId } from '../theory/devices';
 import { INSTRUMENTS } from '../instruments';
 import type { CompStyle } from '../audio/comping';
 import { lickContentKey, recordPass, sanitizePractice, type PracticeLog } from '../practice/log';
@@ -12,6 +13,8 @@ export interface Settings {
   length: keyof typeof LENGTHS;
   /** Difficulty slider position, integer 0..100 (see difficulty/score.ts posToScore). */
   target: number;
+  /** Focus concept to practise (see theory/devices.ts), or 'any'. */
+  focus: ConceptId | 'any';
   instrumentId: string;
   /** 'random' or a concert pitch class 0..11. */
   key: 'random' | number;
@@ -59,6 +62,7 @@ export const DEFAULT_SETTINGS: Settings = {
   progressionId: 'major-251',
   length: 'standard',
   target: 37,
+  focus: 'any',
   instrumentId: 'alto',
   key: 0,
   bpm: 120,
@@ -125,6 +129,7 @@ export function isValidLick(v: unknown): v is Lick {
   if (!Array.isArray(v.chords) || v.chords.length === 0 || !Array.isArray(v.notes) || v.notes.length === 0) return false;
   if (!Array.isArray(v.fragmentIds) || !isNum(v.createdAt)) return false;
   if (v.targetScore !== undefined && !isNum(v.targetScore)) return false;
+  if (v.focus !== undefined && !isConceptId(v.focus)) return false;
   if (v.cellStarts !== undefined && !(Array.isArray(v.cellStarts) && v.cellStarts.every(isNum))) return false;
   for (const c of v.chords) {
     if (!isObj(c) || !isNum(c.rootPc) || typeof c.quality !== 'string' || typeof c.symbol !== 'string' || !isNum(c.start) || !isNum(c.dur)) return false;
@@ -166,6 +171,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (typeof raw.length === 'string' && raw.length in LENGTHS) s.length = raw.length as Settings['length'];
   if (isNum(raw.target) && Number.isInteger(raw.target) && raw.target >= 0 && raw.target <= 100) s.target = raw.target;
   else if (isNum(raw.tier) && [1, 2, 3, 4].includes(raw.tier)) s.target = LEGACY_TIER_TARGET[raw.tier]; // migrate the old 4-way setting
+  if (isConceptId(raw.focus)) s.focus = raw.focus;
   if (typeof raw.instrumentId === 'string' && INSTRUMENTS.some(i => i.id === raw.instrumentId)) s.instrumentId = raw.instrumentId;
   if (raw.key === 'random') s.key = 'random';
   else if (isNum(raw.key) && Number.isInteger(raw.key) && raw.key >= 0 && raw.key < 12) s.key = raw.key;

@@ -30,6 +30,14 @@ describe('boundary targets stay inside the target tier', () => {
       expect(l.difficulty.score).toBeGreaterThanOrEqual(15);
     }
   });
+  it('just below a boundary (slider 24 and 49) stays in the lower tier', () => {
+    for (const [pos, tier] of [[24, 1], [49, 2]] as const) {
+      for (let seed = 1; seed <= 60; seed++) {
+        const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: seed % 12, tier: 1, targetScore: posToScore(pos), range, seed });
+        expect(l.difficulty.tier, `pos ${pos} seed ${seed}`).toBe(tier);
+      }
+    }
+  });
 });
 
 describe('Beginner never gets triplets', () => {

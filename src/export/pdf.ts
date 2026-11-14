@@ -2,6 +2,7 @@ import type { Instrument, Lick } from '../types';
 import { TIER_NAMES } from '../types';
 import { type RenderOptions, renderLick } from '../render/notation';
 import { downloadBlob, fileName, isTransposing, keyLabel, progressionName, writtenKeyLabel } from '../ui/format';
+import { displayScore } from '../difficulty/score';
 
 const RENDER_WIDTH = 720;
 /** Built-in PDF fonts lack the flat/sharp signs. */
@@ -54,12 +55,13 @@ export async function exportPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10.5);
     doc.setTextColor(90, 90, 90);
-    let ky = `Key: ${plain(keyLabel(lick.keyPc, lick.mode))} (concert)`;
-    if (isTransposing(inst)) ky += `  |  you read ${plain(writtenKeyLabel(lick, inst))}`;
+    const ky = isTransposing(inst)
+      ? `Key: ${plain(writtenKeyLabel(lick, inst))}  |  concert ${plain(keyLabel(lick.keyPc, lick.mode))}`
+      : `Key: ${plain(keyLabel(lick.keyPc, lick.mode))}`;
     const lines = [
       ky,
       `Instrument: ${plain(inst.name)}`,
-      `Difficulty: ${TIER_NAMES[lick.difficulty.tier]} (${Math.round(lick.difficulty.score)}/100)`,
+      `Difficulty: ${TIER_NAMES[lick.difficulty.tier]} (${displayScore(lick.difficulty.score)}/100)`,
       `Date: ${new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}`,
     ];
     lines.forEach((l, i) => doc.text(l, margin, margin + 40 + i * 15));
@@ -77,7 +79,7 @@ export async function exportPdf(
     doc.setTextColor(140, 140, 140);
     doc.text('Generated with ii-V-I Lick Studio', margin, pageH - 24);
 
-    downloadBlob(doc.output('blob'), fileName(lick, 'pdf'));
+    downloadBlob(doc.output('blob'), fileName(lick, 'pdf', inst));
   } finally {
     holder.remove();
   }

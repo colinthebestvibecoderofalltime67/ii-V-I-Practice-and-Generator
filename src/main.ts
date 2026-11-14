@@ -26,6 +26,9 @@ const settings: Settings = store.loadSettings();
 let history: StoredEntry[] = store.loadHistory();
 let favorites: StoredEntry[] = store.loadFavorites();
 let lick: Lick | null = null;
+/** The lick as generated or loaded, before any refit. Refits always start from it, so folding notes into a
+ * narrow range (e.g. bass) is undone when switching back to a wider instrument. */
+let sourceLick: Lick | null = null;
 let highlight: number[] = [];
 const player = new Player();
 
@@ -348,8 +351,9 @@ function stopPlayback(): void {
   updateTransport();
 }
 
-function showLick(l: Lick, record: boolean, replaceId?: string): void {
+function showLick(l: Lick, record: boolean, replaceId?: string, refitted = false): void {
   lick = l;
+  if (!refitted) sourceLick = l;
   highlight = [];
   if (record) {
     if (replaceId && replaceId !== l.id) history = store.removeHistory(replaceId);
@@ -385,7 +389,8 @@ function refit(keyPc: number): void {
   if (!lick) return;
   stopPlayback();
   const old = lick.id;
-  showLick(transposeLick(lick, keyPc, concertRange(inst())), true, old);
+  const base = sourceLick && sourceLick.id === old ? sourceLick : lick;
+  showLick(transposeLick(base, keyPc, concertRange(inst())), true, old, true);
 }
 
 function restartIfPlaying(): void {

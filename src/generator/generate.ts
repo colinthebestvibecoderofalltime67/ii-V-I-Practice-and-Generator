@@ -388,7 +388,9 @@ export function generateLick(opts: GenerateOptions): Lick {
       const score = scoreLick(notes, chords, def).score;
       roundScores.push(score);
       // With a target, staying inside the target's tier outranks closeness (a target on a boundary must not land across it).
-      const dist = target !== undefined ? tierDistance(score, reqTier) * 100 + Math.abs(score - target) : tierDistance(score, reqTier);
+      const dist = target !== undefined
+        ? (tierDistance(score, reqTier) > 0 ? 1000 : 0) + Math.abs(score - target)
+        : tierDistance(score, reqTier);
       if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist };
     }
     if (best && best.dist <= tol) break;

@@ -87,8 +87,12 @@ describe('share codes', () => {
     }
   });
 
-  it('encodes a quarter-triplet pair (dur 16) and still decodes v1 links', () => {
-    const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, targetScore: 90, range, seed: 369 });
+  it('encodes a quarter-triplet pair (dur 16) and still decodes v1 links', { timeout: 60_000 }, () => {
+    // find a lick with a 2-unit quarter triplet (dur 16); which seed produces one changes as the generator evolves
+    let l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, targetScore: 90, range, seed: 1 });
+    for (let seed = 2; seed < 3000 && !l.notes.some(n => n.dur === 16); seed++) {
+      l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, targetScore: 90, range, seed });
+    }
     expect(l.notes.some(n => n.dur === 16)).toBe(true);
     expect(() => shareUrl(l, 'https://x.test/')).not.toThrow();
     roundTrip(l);

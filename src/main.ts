@@ -278,6 +278,7 @@ function noteLabels(): (NoteLabel | null)[] | undefined {
 
 function setStatus(s: string): void {
   $('status').textContent = s;
+  updateBar();
 }
 
 function renderMeta(): void {
@@ -297,6 +298,7 @@ function renderMeta(): void {
     meta.append(s);
   }
 
+  updateBar();
   $('tier-name').textContent = TIER_NAMES[d.tier];
   const score = displayScore(d.score);
   $('tier-score').textContent = `${score} / 100`;
@@ -342,6 +344,7 @@ function updateTransport(): void {
   $('play-icon').innerHTML = playing ? PAUSE_PATH : PLAY_PATH;
   const dis = !lick;
   for (const id of ['btn-play', 'btn-stop', 'btn-export', 't-fav']) $<HTMLButtonElement>(id).disabled = dis;
+  updateBar();
 }
 
 function updateFav(): void {
@@ -689,12 +692,52 @@ function bind(): void {
   });
 }
 
+/* ---------------------------------------------------------------- phone practice bar */
+/* The bar only forwards to the existing buttons (clicking a display:none button still runs its handler). */
+
+const phoneMq = window.matchMedia('(max-width: 760px)');
+
+function updateBar(): void {
+  const play = $<HTMLButtonElement>('btn-play');
+  $('pb-play-label').textContent = $('play-label').textContent;
+  $('pb-play-icon').innerHTML = $('play-icon').innerHTML;
+  $<HTMLButtonElement>('pb-play').disabled = play.disabled;
+  // No aria-pressed: the visible label itself announces Play / Pause / Resume.
+  $('pb-key').textContent = lick ? titleKeyLabel(lick, inst()) : '–';
+  const st = $('status').textContent ?? '';
+  $('pb-bar').textContent = /^bar /.test(st) ? st.replace(' / ', '/') : /count/.test(st) ? st.replace(/.*: ?/, 'count ') : st === 'Paused' ? 'paused' : lick ? lengthShort(lick.length) : '';
+  updateRecap();
+}
+
+function updateRecap(): void {
+  const romans = romansFor(settings.progressionId).join('–');
+  const key = settings.key === 'random' ? 'Random key' : keyLabel(settings.key, getProgression(settings.progressionId).mode);
+  $('fold-recap').textContent =
+    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], instShort(inst()), key, lengthShort(settings.length)].join(' · ');
+}
+
+function setupPhoneBar(): void {
+  const fold = $<HTMLDetailsElement>('lick-settings');
+  const fwd = (from: string, to: string): void => $(from).addEventListener('click', () => $(to).click());
+  fwd('pb-play', 'btn-play');
+  fwd('pb-next', 'btn-gen');
+  fwd('pb-dn', 'key-dn');
+  fwd('pb-up', 'key-up');
+  // Desktop always shows the settings; phones fold them once a first lick exists.
+  const sync = (): void => { if (!phoneMq.matches) fold.open = true; };
+  phoneMq.addEventListener('change', e => { if (e.matches) fold.open = false; else sync(); });
+  if (phoneMq.matches) fold.open = false;
+  fold.addEventListener('toggle', updateRecap);
+  updateBar();
+}
+
 /* ---------------------------------------------------------------- boot */
 
 buildStaticControls();
 fillKeyOptions();
 syncControls();
 bind();
+setupPhoneBar();
 if (openSharedLick()) { /* shown */ } else if (history.length) {
   const h = history[0].lick;
   showLick(transposeLick(h, h.keyPc, concertRange(inst()), comfortFor(h)), false);

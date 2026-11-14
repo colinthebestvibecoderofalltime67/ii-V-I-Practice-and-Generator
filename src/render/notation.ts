@@ -3,13 +3,17 @@ import {
   StaveTie, TabNote, TabStave, Tuplet, Voice,
 } from 'vexflow';
 import type { Instrument, Lick } from '../types';
-import { TPBAR } from '../types';
+import type { DeviceKind } from '../theory/devices';
+import { TPB, TPBAR } from '../types';
 import { barOf, findTupletGroups, isTupletDur, splitDur, tupletDisplayDur, type TupletKind } from '../theory/rhythm';
 import { keySignatureName, mod12 } from '../theory/pitch';
 import { chordSymbolText, formatSpelling, spellChordRoot, spellLick } from '../theory/spell';
 import { type FingeredNote, lickFingerings, pickFingering, roman } from './tab';
 
 export interface NoteLabel { text: string; color?: string }
+
+/** A device bracket (Analyze): lick note indexes `first..last` (inclusive), a short label drawn over it. */
+export interface DeviceMark { kind: DeviceKind; first: number; last: number; label: string }
 
 export interface RenderOptions {
   highlight?: number[];
@@ -39,6 +43,12 @@ export interface RenderOptions {
   hideNotes?: boolean;
   /** Fill for the active-bar tint. Default: a faint blue. */
   activeBarColor?: string;
+  /**
+   * Device brackets (enclosures, anticipations, triad pairs...). Each is a thin line with end ticks and a small label above
+   * the staff, between the chord symbols and the notes; it is split across system breaks like a tie and hidden with
+   * `hideNotes`. Space is reserved above the staff only when devices are given (one row, two when brackets crowd each other).
+   */
+  devices?: DeviceMark[];
 }
 
 const DEFAULT_HL = '#b4531a';
@@ -438,10 +448,25 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const topLineMidi = clef === 'bass' ? 57 : 77;
   const botLineMidi = clef === 'bass' ? 43 : 64;
   const TUP_H = 14; // room for a triplet bracket / number
+  // device brackets: a band under the chord symbols; two rows when two brackets are close in time
+  const devMarks = (opts.devices ?? []).filter(d => lick.notes[d.first] && lick.notes[d.last] && d.last >= d.first);
+  const devSpan = (d: DeviceMark): [number, number] => [lick.notes[d.first].start, lick.notes[d.last].start + lick.notes[d.last].dur];
+  const devSorted = [...devMarks].sort((a, b) => devSpan(a)[0] - devSpan(b)[0]);
+  // rows by greedy packing on time, each bracket reserving at least the time its label needs (~40 px per beat)
+  const devRowEnds: number[] = [];
+  for (const d of devSorted) {
+    const [t0, t1] = devSpan(d);
+    const end = Math.max(t1, t0 + Math.ceil(((d.label.length * 5.4 + 4) / 40) * TPB)) + 6;
+    const r = devRowEnds.findIndex(e => t0 >= e);
+    if (r >= 0) devRowEnds[r] = end; else devRowEnds.push(end);
+  }
+  const devRows = Math.min(3, devRowEnds.length);
+  const DEV_ROW = 13;
+  const DEV_H = devRows ? 8 + devRows * DEV_ROW : 0;
   const extraTop = Math.max(0, (hi - topLineMidi) * 2.9 + 4) + (hasTuplets ? TUP_H : 0);
   const extraBot = Math.max(0, (botLineMidi - lo) * 2.9 + 4);
   const CHORD_BASE = 24; // chord baseline below system top
-  const topLineOff = CHORD_BASE + 24 + extraTop;
+  const topLineOff = CHORD_BASE + 24 + extraTop + DEV_H;
   const staffH = 40;
   const belowStaff = 30 + extraBot;
   const tabSpacing = 13;
@@ -660,6 +685,84 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
     }
   }
   ctx.closeGroup();
+  if (devMarks.length) {
+    // brackets: global piece range of each device, cut at system breaks (label on the first part only)
+    const firstPiece = new Map<number, number>();
+    const lastPiece = new Map<number, number>();
+    globalPieces.forEach((p, i) => {
+      if (p.noteIdx < 0) return;
+      if (!firstPiece.has(p.noteIdx)) firstPiece.set(p.noteIdx, i);
+      lastPiece.set(p.noteIdx, i);
+    });
+    ctx.openGroup('hidden-notes');
+    ctx.save();
+    ctx.setFont(ROMAN_FONT, 10, 'normal');
+    // VexFlow's SVG text measurement returns 0 here (and caches it), so measure with a canvas 2D context (10pt = 13.33px,
+    // the size ctx.setFont draws at) and fall back to a monospace estimate (0.6 em per character).
+    const devTextW = (t: string): number => {
+      let m = 0;
+      try {
+        const c2 = document.createElement('canvas').getContext('2d');
+        if (c2) { c2.font = `${(10 * 4) / 3}px ${ROMAN_FONT}`; m = c2.measureText(t).width; }
+      } catch { /* no canvas: estimate */ }
+      return m > 0 ? m : t.length * 8;
+    };
+    const ink = print ? '#000' : '#4A4944';
+    ctx.setFillStyle(ink);
+    ctx.setStrokeStyle(ink);
+    ctx.setLineWidth(1);
+    interface Seg { x1: number; x2: number; label: string | null; labelW: number; openLeft: boolean; openRight: boolean }
+    const perSys: Seg[][] = systems.map(() => []);
+    for (const d of devMarks) {
+      const a = firstPiece.get(d.first);
+      const z = lastPiece.get(d.last);
+      if (a === undefined || z === undefined || z < a) continue;
+      let i = a;
+      let firstSeg = true;
+      while (i <= z) {
+        let j = i;
+        while (j + 1 <= z && sysOfPiece[j + 1] === sysOfPiece[i] && drawnNotes.has(j + 1)) j++;
+        const na = drawnNotes.get(i);
+        const nz = drawnNotes.get(j);
+        if (na && nz) {
+          const x1 = na.getNoteHeadBeginX() - 2;
+          const x2 = nz.getNoteHeadEndX() + 2;
+          // a continuation past a system break is labelled "(encl.)"; a tiny stub (< 10 px) is not drawn
+          const label = firstSeg ? d.label : x2 - x1 >= 10 ? `(${d.label})` : null;
+          if (firstSeg || label) {
+            perSys[sysOfPiece[i]].push({ x1, x2, label, labelW: label ? devTextW(label) : 0, openLeft: !firstSeg, openRight: j < z });
+          }
+          firstSeg = false;
+        }
+        i = j + 1;
+      }
+    }
+    perSys.forEach((segs, si) => {
+      const y0 = MARGIN + si * sysH;
+      const bandTop = y0 + CHORD_BASE + 6;
+      const rowRight: number[] = Array(devRows).fill(-Infinity);
+      for (const sg of [...segs].sort((p, q) => p.x1 - q.x1)) {
+        // the label sits at the bracket start, pulled left only as far as needed to stay inside the page
+        const lx = Math.max(MARGIN, Math.min(sg.x1, layoutW + MARGIN - sg.labelW - 2));
+        const left = Math.min(sg.x1, lx);
+        const ext = Math.max(sg.x2, lx + sg.labelW);
+        const row = rowRight.findIndex(r => left >= r + 4);
+        if (row < 0) continue; // no room: the device is still listed in the Analysis panel
+        rowRight[row] = ext;
+        const base = bandTop + 9 + row * DEV_ROW; // text baseline
+        const ly = base + 3;
+        ctx.beginPath();
+        ctx.moveTo(sg.x1, ly + (sg.openLeft ? 0 : 3));
+        ctx.lineTo(sg.x1, ly);
+        ctx.lineTo(sg.x2, ly);
+        ctx.lineTo(sg.x2, ly + (sg.openRight ? 0 : 3));
+        ctx.stroke();
+        if (sg.label) ctx.fillText(sg.label, lx, base);
+      }
+    });
+    ctx.restore();
+    ctx.closeGroup();
+  }
   void drawnTab;
   if (opts.hideNotes) svg.querySelectorAll('g[class*="hidden-notes"]').forEach(g => g.setAttribute('visibility', 'hidden'));
 

@@ -8,7 +8,7 @@ import { inScale } from '../src/theory/chords';
 import { judgedChord } from '../src/theory/rhythm';
 import { Rng } from '../src/generator/rng';
 import { anticipationFitsOldChord, phraseEvents, type Ev } from '../src/generator/connect';
-import { chordRoles } from '../src/generator/generate';
+import { chordRoles, type ChordRole } from '../src/generator/generate';
 import { PROGRESSIONS } from '../src/theory/progressions';
 import { sessionSample } from './_samples';
 import { TIER_NAMES, type Fragment, type Lick, type LickChord, type Tier } from '../src/types';
@@ -104,12 +104,27 @@ describe('anticipation filter: the early note must fit the OLD chord', () => {
 });
 
 describe('chord roles', () => {
+  /** Expected role of every chord, per progression (the generator and the difficulty score read the slot's `fn`, never the ids). */
+  const ROLES: Record<string, ChordRole[]> = {
+    'major-251': ['other', 'primaryV', 'other'],
+    'major-251-alt': ['other', 'alt', 'other'],
+    'minor-251': ['other', 'alt', 'other'],
+    'tritone-251': ['other', 'lyd', 'other'],
+    'backdoor-251': ['other', 'lyd', 'other'],
+    'turnaround': ['other', 'secondary', 'other', 'primaryV', 'other'],
+    'chain-36251': ['other', 'secondary', 'other', 'primaryV', 'other'],
+    'coltrane': ['other', 'primaryV', 'other', 'primaryV', 'other', 'primaryV', 'other'],
+  };
   it('Lydian dominants are the tritone-sub and backdoor V chords; the major-251 V7 is the primary V', () => {
-    const roles = (id: string) => chordRoles(id, PROGRESSIONS.find(p => p.id === id)!.slots);
-    expect(roles('tritone-251')).toEqual(['other', 'lyd', 'other']);
-    expect(roles('backdoor-251')).toEqual(['other', 'lyd', 'other']);
-    expect(roles('major-251')).toEqual(['other', 'primaryV', 'other']);
-    expect(roles('minor-251')).toEqual(['other', 'alt', 'other']);
+    for (const p of PROGRESSIONS) expect(chordRoles(p.slots), p.id).toEqual(ROLES[p.id]);
+    expect(Object.keys(ROLES).sort()).toEqual(PROGRESSIONS.map(p => p.id).sort());
+  });
+  it('every dom7alt slot is an altV, every lydianDom slot a dom7, and only dominants carry a dominant function', () => {
+    for (const p of PROGRESSIONS) for (const s of p.slots) {
+      expect(s.quality === 'dom7alt', `${p.id} ${s.roman}`).toBe(s.fn === 'altV');
+      if (['primaryV', 'secondaryDom', 'lydianDom', 'altV'].includes(s.fn)) expect(s.quality.startsWith('dom7'), `${p.id} ${s.roman}`).toBe(true);
+      if (s.fn === 'lydianDom') expect(s.quality).toBe('dom7');
+    }
   });
 });
 

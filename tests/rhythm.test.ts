@@ -38,6 +38,7 @@ import { generateLick } from '../src/generator/generate';
 import { concertRange, getInstrument } from '../src/instruments';
 import { spellLick } from '../src/theory/spell';
 import { analyzeLick } from '../src/theory/analyze';
+import { PROGRESSIONS } from '../src/theory/progressions';
 
 describe('anticipations are heard against the chord they arrive on', () => {
   const notes = [
@@ -55,7 +56,7 @@ describe('anticipations are heard against the chord they arrive on', () => {
   it('no anticipation head is spelled or labelled against the old chord (piano sweep)', () => {
     const piano = getInstrument('piano');
     let heads = 0;
-    for (const p of ['major-251', 'major-251-alt', 'minor-251', 'tritone-251', 'backdoor-251']) {
+    for (const p of PROGRESSIONS.map(p => p.id)) {
       for (let seed = 1; seed <= 40; seed++) {
         const l = generateLick({ progressionId: p, length: 'standard', keyPc: seed % 12, tier: 3, range: concertRange(piano), seed });
         const a = analyzeLick(l, piano);

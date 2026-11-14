@@ -61,7 +61,26 @@ export type FragTag =
   | 'pentatonic'
   | 'guide-tone'
   | 'sequence'
-  | 'motif';
+  | 'motif'
+  /** Two triads a whole step apart, alternated (src/theory/devices.ts detects the pairs from the notes). */
+  | 'triad-pair'
+  /** Barry Harris 6th-diminished scale line over maj7 / m6. */
+  | 'sixth-dim'
+  /** A different ii-V (or a tritone-sub / half-step side-slip figure) played over one chord. */
+  | 'superimposition';
+
+/**
+ * A "Focus" concept the player can practise (see src/theory/devices.ts for how each is found in the notes).
+ * Beginner+: guideTones, enclosures, chromaticApproach, anticipateI. Advanced+: triadPairs, sixthDim, superimposition.
+ */
+export type ConceptId =
+  | 'guideTones'
+  | 'enclosures'
+  | 'chromaticApproach'
+  | 'anticipateI'
+  | 'triadPairs'
+  | 'sixthDim'
+  | 'superimposition';
 
 export interface Fragment {
   /** Unique, stable id, e.g. "m7-proto-03a" or "dom7alt-orig-12". */
@@ -76,10 +95,27 @@ export interface Fragment {
   level: Tier;
   /** True if it ends with a sustained resolution and can close a lick (used for the final I chord). */
   ending?: boolean;
+  /**
+   * A cell written for one Focus concept (src/theory/devices.ts). It is offered only while that Focus is on, so lick generation
+   * without a Focus draws from exactly the pool it always had.
+   */
+  concept?: ConceptId;
   source: 'prototype' | 'original';
 }
 
 /* ---------------- progressions ---------------- */
+
+/**
+ * What a chord does in its progression. Colours the generator's cell choice (generate.ts chordRoles), the difficulty
+ * score's Lydian-dominant detection and the musicality metrics; never used to decide where a lick ends (that is the last slot).
+ *  tonic: I, iii, or a local tonic inside a longer chain (maj7 / m7);
+ *  predominant: ii, iv (the chord that sets up the dominant);
+ *  primaryV: a plain dominant that resolves to the next chord (Mixolydian first);
+ *  secondaryDom: a dominant of a non-tonic chord (VI7 -> ii): Mixolydian with b9 / b13 colour allowed;
+ *  lydianDom: tritone-sub bII7 or backdoor bVII7 (Lydian dominant: #11, no natural 11, no altered tensions);
+ *  altV: a dom7alt dominant (altered scale).
+ */
+export type SlotFn = 'tonic' | 'predominant' | 'primaryV' | 'secondaryDom' | 'lydianDom' | 'altV';
 
 export interface ProgressionSlot {
   /** Root of this chord in semitones above the tonic (ii = 2, V = 7, bII = 1, iv = 5, bVII = 10, I = 0). */
@@ -87,6 +123,7 @@ export interface ProgressionSlot {
   quality: ChordQualityId;
   /** Roman numeral label for UI, e.g. "ii", "V7", "bII7". */
   roman: string;
+  fn: SlotFn;
 }
 
 export interface ProgressionDef {
@@ -99,6 +136,12 @@ export interface ProgressionDef {
   minTier: Tier;
   description: string;
   slots: ProgressionSlot[];
+  /**
+   * Beats per slot for each length (one entry per slot; every length must sum to whole bars, i.e. a multiple of 4,
+   * and no slot may be shorter than 2 beats). Default: LENGTHS in theory/progressions.ts, which only fits three slots.
+   * The last slot holds the lick's ending, so it should be at least 4 beats.
+   */
+  rhythm?: Record<LengthId, number[]>;
 }
 
 /* ---------------- a generated lick ---------------- */
@@ -157,6 +200,8 @@ export interface Lick {
   notes: LickNote[];
   totalTicks: number;
   fragmentIds: string[];
+  /** The Focus concept this lick was generated for (absent when none, or when it was not allowed at the lick's tier). */
+  focus?: ConceptId;
   /** Tick where each melodic cell (fragment) starts, parallel to fragmentIds. Optional: older saved licks lack it. */
   cellStarts?: number[];
   difficulty: DifficultyResult;

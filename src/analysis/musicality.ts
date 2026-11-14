@@ -3,11 +3,13 @@
  * and vocabulary changes are judged by numbers rather than taste. Each metric answers one question a jazz
  * player would ask of a line; see docs/ARCHITECTURE.md.
  */
-import type { Lick, LickNote } from '../types';
+import type { ConceptId, Lick, LickNote } from '../types';
 import { TPB } from '../types';
 import { CHORDS, inScale } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
+import { getProgression } from '../theory/progressions';
 import { anticipationFitsOldChord } from '../generator/connect';
+import { conceptHits } from '../theory/devices';
 
 /** Degree label of the closing note, for the ending-tone distribution. */
 export type EndingDegree = 'R' | '3' | '5' | '7' | '9' | '6' | 'other';
@@ -38,6 +40,8 @@ export interface LickMetrics {
   seamRepeats: number;
   /** For each dominant chord: is the note sounding as it arrives its 3rd or 7th? (null = no note sounding) */
   dominantArrivalGuide: (boolean | null)[];
+  /** For every chord change (not the first chord): does the note sounding as the chord arrives (an anticipation counts) carry one of its guide tones? null = rest. */
+  changeArrivalGuide: (boolean | null)[];
   /** Natural 5th or natural 13th attacked on a beat over a 7alt chord. */
   altNaturalOnBeat: number;
   /** Non-scale (chromatic) notes attacked on a beat and held a beat or longer. */
@@ -62,6 +66,9 @@ export interface LickMetrics {
   /** For each Lydian dominant (tritone-sub / backdoor V): #11 present and no natural 11 over it; and any b9/#9/b13 over it. */
   lydianSharp11: boolean[];
   lydianAltered: boolean[];
+  /** For each secondary dominant (VI7 -> ii): the line over it states the b9; and holds a natural 13 on a beat (it clashes with the ii's b3). */
+  secDomFlat9: boolean[];
+  secDomNat13Stressed: boolean[];
   /** Longest run of consecutive chord-tone-only attacks within an octave (arpeggio noodling when > 6). */
   noodleRun: number;
   /** Longest stepwise (<= 2 semitones) run of 16th notes starting in the final bar. */
@@ -104,6 +111,13 @@ export function lickMetrics(lick: Lick): LickMetrics {
     return CHORDS[ch.quality].guide.some(g => mod12(g) === rel);
   }).filter((v): v is boolean | null => v !== undefined);
 
+  const changeArrivalGuide = chords.slice(1).map(ch => {
+    const a = att.find(x => x.start <= ch.start && x.start + x.dur > ch.start);
+    if (!a) return null;
+    const rel = mod12(a.midi - ch.rootPc);
+    return CHORDS[ch.quality].guide.some(g => mod12(g) === rel);
+  });
+
   let altNaturalOnBeat = 0;
   let longChromaticOnBeat = 0;
   for (const a of att) {
@@ -123,13 +137,14 @@ export function lickMetrics(lick: Lick): LickMetrics {
     [att.some(a => a.chord === ci && [1, 3, 8].includes(mod12(a.midi - ch.rootPc)))]);
   let maj7FourthStressed = 0;
   let lydianDomEleven = 0;
-  const lydianDom = lick.progressionId === 'tritone-251' || lick.progressionId === 'backdoor-251';
+  const slots = getProgression(lick.progressionId).slots;
+  const isLydChord = (ci: number) => slots[ci]?.fn === 'lydianDom' && chords[ci].quality === 'dom7';
   for (const a of att) {
     const ch = chords[a.chord];
     const rel = mod12(a.midi - ch.rootPc);
     const stressed = a.start % TPB === 0 || a.dur >= TPB;
     if (stressed && ch.quality === 'maj7' && rel === 5) maj7FourthStressed++;
-    if (stressed && lydianDom && ch.quality === 'dom7' && rel === 5) lydianDomEleven++;
+    if (stressed && isLydChord(a.chord) && rel === 5) lydianDomEleven++;
   }
   let dottedPairs = 0;
   const notes = lick.notes;
@@ -138,7 +153,6 @@ export function lickMetrics(lick: Lick): LickMetrics {
   }
   const endingRepeat = att.length > 1 && att[att.length - 1].midi === att[att.length - 2].midi;
 
-  const isLydChord = (ci: number) => lydianDom && chords[ci].quality === 'dom7';
   const lydianSharp11: boolean[] = [];
   const lydianAltered: boolean[] = [];
   chords.forEach((ch, ci) => {
@@ -146,6 +160,14 @@ export function lickMetrics(lick: Lick): LickMetrics {
     const rels = att.filter(a => a.chord === ci).map(a => mod12(a.midi - ch.rootPc));
     lydianSharp11.push(rels.includes(6) && !rels.includes(5));
     lydianAltered.push(rels.some(r => r === 1 || r === 3 || r === 8));
+  });
+  const secDomFlat9: boolean[] = [];
+  const secDomNat13Stressed: boolean[] = [];
+  chords.forEach((ch, ci) => {
+    if (slots[ci]?.fn !== 'secondaryDom' || ch.quality !== 'dom7') return;
+    const mine = att.filter(a => a.chord === ci);
+    secDomFlat9.push(mine.some(a => mod12(a.midi - ch.rootPc) === 1));
+    secDomNat13Stressed.push(mine.some(a => mod12(a.midi - ch.rootPc) === 9 && (a.start % TPB === 0 || a.dur >= TPB)));
   });
   let noodleRun = 0;
   let run: number[] = [];
@@ -201,9 +223,9 @@ export function lickMetrics(lick: Lick): LickMetrics {
     if (p.slice(0, 3).join() === q.slice(0, 3).join() || p.slice(-2).join() === q.slice(-2).join()) nearDuplicatePairs++;
   }
   return {
-    anticipations, startsWithRest, seamRepeats, dominantArrivalGuide, altNaturalOnBeat, longChromaticOnBeat, span,
+    anticipations, startsWithRest, seamRepeats, dominantArrivalGuide, changeArrivalGuide, altNaturalOnBeat, longChromaticOnBeat, span,
     bigLeaps, sixteenths, attackCount: att.length, altColoured, maj7FourthStressed, dottedPairs, lydianDomEleven, endingRepeat,
-    lydianSharp11, lydianAltered, noodleRun, finalSixteenthRun, ending, anticipationClashes, altThin, m7b5Flat5, cellPairs, nearDuplicatePairs,
+    lydianSharp11, lydianAltered, secDomFlat9, secDomNat13Stressed, noodleRun, finalSixteenthRun, ending, anticipationClashes, altThin, m7b5Flat5, cellPairs, nearDuplicatePairs,
   };
 }
 
@@ -216,6 +238,8 @@ export interface MusicalitySummary {
   seamRepeatShare: number;
   /** Share of dominant arrivals landing on the 3rd or 7th (arrivals with no sounding note excluded). */
   dominantGuideShare: number;
+  /** Share of ALL chord changes (every chord after the first) arrived on a guide tone of the new chord (rests excluded). */
+  changeGuideShare: number;
   /** Natural 5/13 on-beat attacks over 7alt per 1,000 attacks. */
   altNaturalPerK: number;
   longChromaticPerK: number;
@@ -240,6 +264,9 @@ export interface MusicalitySummary {
   lydianSharp11Share: number;
   /** Share of those dominants carrying a b9, #9 or b13 (the wrong, altered colour). */
   lydianAlteredShare: number;
+  /** Share of secondary dominants (VI7 -> ii) with a b9, and with a stressed natural 13. */
+  secDomFlat9Share: number;
+  secDomNat13StressedShare: number;
   /** Share of licks with arpeggio noodling (more than six chord-tone attacks in a row within an octave). */
   noodleShare: number;
   /** Share of licks with a stepwise 16th run of more than four notes in the final bar. */
@@ -257,10 +284,10 @@ export interface MusicalitySummary {
 }
 
 export function summarize(licks: readonly Lick[]): MusicalitySummary {
-  let ant = 0, rest = 0, seam = 0, guideHit = 0, guideN = 0, altNat = 0, longChr = 0, nAtt = 0;
+  let ant = 0, rest = 0, seam = 0, guideHit = 0, guideN = 0, chgHit = 0, chgN = 0, altNat = 0, longChr = 0, nAtt = 0;
   let leap = 0, six = 0, altN = 0, altPlain = 0, fourth = 0, dotted = 0, lyd = 0, lydN = 0, endRep = 0;
   const cellUse = new Map<string, number>();
-  let lsN = 0, ls = 0, laN = 0, la = 0, nood = 0, f16 = 0, clash = 0, antN = 0, thinN = 0, thin = 0, flatN = 0, flat = 0, pairs = 0, dupPairs = 0;
+  let sdN = 0, sd9 = 0, sd13 = 0, lsN = 0, ls = 0, laN = 0, la = 0, nood = 0, f16 = 0, clash = 0, antN = 0, thinN = 0, thin = 0, flatN = 0, flat = 0, pairs = 0, dupPairs = 0;
   const endCount: Record<EndingDegree, number> = { R: 0, '3': 0, '5': 0, '7': 0, '9': 0, '6': 0, other: 0 };
   for (const l of licks) {
     const m = lickMetrics(l);
@@ -268,6 +295,7 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     if (m.startsWithRest) rest++;
     if (m.seamRepeats > 0) seam++;
     for (const g of m.dominantArrivalGuide) if (g !== null) { guideN++; if (g) guideHit++; }
+    for (const g of m.changeArrivalGuide) if (g !== null) { chgN++; if (g) chgHit++; }
     altNat += m.altNaturalOnBeat;
     longChr += m.longChromaticOnBeat;
     nAtt += m.attackCount;
@@ -276,10 +304,11 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     for (const c of m.altColoured) { altN++; if (!c) altPlain++; }
     if (m.maj7FourthStressed > 0) fourth++;
     if (m.dottedPairs >= 2) dotted++;
-    if (l.progressionId === 'tritone-251' || l.progressionId === 'backdoor-251') { lydN++; if (m.lydianDomEleven > 0) lyd++; }
+    if (getProgression(l.progressionId).slots.some(s => s.fn === 'lydianDom')) { lydN++; if (m.lydianDomEleven > 0) lyd++; }
     if (m.endingRepeat) endRep++;
     for (const v of m.lydianSharp11) { lsN++; if (v) ls++; }
     for (const v of m.lydianAltered) { laN++; if (v) la++; }
+    for (let k = 0; k < m.secDomFlat9.length; k++) { sdN++; if (m.secDomFlat9[k]) sd9++; if (m.secDomNat13Stressed[k]) sd13++; }
     if (m.noodleRun > 6) nood++;
     if (m.finalSixteenthRun > 4) f16++;
     endCount[m.ending]++;
@@ -301,6 +330,7 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     startsWithRestShare: rest / n,
     seamRepeatShare: seam / n,
     dominantGuideShare: guideN ? guideHit / guideN : 0,
+    changeGuideShare: chgN ? chgHit / chgN : 0,
     altNaturalPerK: (1000 * altNat) / Math.max(1, nAtt),
     longChromaticPerK: (1000 * longChr) / Math.max(1, nAtt),
     topCellShare: top / n,
@@ -314,6 +344,8 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     endingRepeatShare: endRep / n,
     lydianSharp11Share: lsN ? ls / lsN : 0,
     lydianAlteredShare: laN ? la / laN : 0,
+    secDomFlat9Share: sdN ? sd9 / sdN : 0,
+    secDomNat13StressedShare: sdN ? sd13 / sdN : 0,
     noodleShare: nood / n,
     finalSixteenthRunShare: f16 / n,
     endingShares: Object.fromEntries(ENDING_DEGREES.map(d => [d, endCount[d] / n])) as Record<EndingDegree, number>,
@@ -322,4 +354,26 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     m7b5Flat5Share: flatN ? flat / flatN : 0,
     nearDuplicateShare: pairs ? dupPairs / pairs : 0,
   };
+}
+
+/**
+ * Concept hit rate: of the licks generated with a Focus, how much of the concept do the notes deliver (detectDevices)?
+ * Per lick, `hits / of` comes from conceptHits: guide tones count the chord changes with a guide-tone link, the other
+ * concepts count 1 when the device occurs at all. The rate is hits over opportunities across the licks.
+ */
+export function conceptHitRate(licks: readonly Lick[], concept: ConceptId): { licks: number; hits: number; of: number; rate: number } {
+  let hits = 0;
+  let of = 0;
+  for (const l of licks) {
+    const h = conceptHits(l, concept);
+    hits += h.hits;
+    of += h.of;
+  }
+  return { licks: licks.length, hits, of, rate: of ? hits / of : 0 };
+}
+
+/** Mean absolute distance between the slider target a lick was generated for and the score it came out with (licks with a target only). */
+export function sliderError(licks: readonly Lick[]): number {
+  const t = licks.filter(l => l.targetScore !== undefined);
+  return t.length ? t.reduce((a, l) => a + Math.abs(l.difficulty.score - (l.targetScore as number)), 0) / t.length : 0;
 }

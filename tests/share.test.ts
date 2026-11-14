@@ -3,7 +3,7 @@ import { generateLick } from '../src/generator';
 import { INSTRUMENTS, concertRange, getInstrument } from '../src/instruments';
 import { isValidLick } from '../src/storage';
 import { analyzeLick } from '../src/theory/analyze';
-import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
+import { LENGTHS, PROGRESSIONS, getProgression } from '../src/theory/progressions';
 import { decodeLick, encodeLick, parseShareHash, shareUrl } from '../src/share';
 import { isTupletDur } from '../src/theory/rhythm';
 import type { LengthId, Lick, Tier } from '../src/types';
@@ -54,6 +54,37 @@ describe('share codes', () => {
     expect(maxLen.short).toBeLessThan(200);
   }, 60000);
 
+  it('the longer progressions sit at share indexes 5, 6 and 7 and round-trip at every length, key and tier', () => {
+    const ids = ['turnaround', 'chain-36251', 'coltrane'];
+    ids.forEach((id, k) => {
+      expect(PROGRESSIONS.findIndex(p => p.id === id), id).toBe(5 + k);
+      for (const length of lengths) for (const tier of [1, 2, 3, 4] as Tier[]) for (const keyPc of [0, 3, 6, 11]) {
+        const l = generateLick({ progressionId: id, length, keyPc, tier, range, seed: keyPc * 13 + tier });
+        const code = roundTrip(l);
+        const b0 = atob(code.replace(/-/g, '+').replace(/_/g, '/'));
+        expect(b0.charCodeAt(1) >> 4, `${id} progression nibble`).toBe(5 + k);
+        expect(b0.charCodeAt(1) & 15).toBe(keyPc);
+        expect(decodeLick(code)!.chords.length).toBe(getProgression(id).slots.length);
+        expect(parseShareHash(`#l=${code}`).kind).toBe('lick');
+      }
+    });
+    // a link cut short or padded for the new, longer licks is refused
+    const l = generateLick({ progressionId: 'coltrane', length: 'long', keyPc: 2, tier: 3, range, seed: 4 });
+    const code = encodeLick(l);
+    expect(decodeLick(code.slice(0, -4))).toBeNull();
+    expect(decodeLick(code + 'AAAA')).toBeNull();
+  });
+
+  it('links of the five original progressions still decode to the same licks (the registry only grew)', () => {
+    for (const id of ['major-251', 'major-251-alt', 'minor-251', 'tritone-251', 'backdoor-251']) {
+      const l = generateLick({ progressionId: id, length: 'short', keyPc: 9, tier: 2, range, seed: 21 });
+      const d = decodeLick(encodeLick(l))!;
+      expect(d.progressionId).toBe(id);
+      expect(d.notes).toEqual(l.notes);
+      expect(d.totalTicks).toBe(l.totalTicks);
+    }
+  });
+
   it('decoded id is stable, and shareUrl/parseShareHash agree', () => {
     const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 3, tier: 3, range, seed: 5 });
     const url = shareUrl(l, 'https://example.com/app/?x=1#old');
@@ -75,11 +106,12 @@ describe('share codes', () => {
     const b = atob(code.replace(/-/g, '+').replace(/_/g, '/'));
     const flip = (i: number, v: number) =>
       btoa(Array.from(b, (ch, k) => String.fromCharCode(k === i ? v : ch.charCodeAt(0))).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    expect(decodeLick(flip(0, 0x30 | (b.charCodeAt(0) & 15)))).toBeNull(); // unknown version
+    expect(decodeLick(flip(0, 0x40 | (b.charCodeAt(0) & 15)))).toBeNull(); // unknown version
     expect(decodeLick(flip(1, 0xf0 | (b.charCodeAt(1) & 15)))).toBeNull(); // unknown progression
     expect(decodeLick(flip(1, (b.charCodeAt(1) & 0xf0) | 13))).toBeNull(); // key > 11
     expect(decodeLick(flip(2, 255))).toBeNull(); // score > 100
-    expect(decodeLick(flip(3, 0xff))).toBeNull(); // bad note header
+    expect(decodeLick(flip(3, 0xff))).toBeNull(); // unknown Focus concept
+    expect(decodeLick(flip(4, 0xff))).toBeNull(); // bad note header
     let seed = 1;
     const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
     for (let k = 0; k < 2000; k++) {
@@ -100,11 +132,30 @@ describe('share codes', () => {
     // a v1 link (version nibble 1, no dur 16) written by the old encoder must keep decoding to the same lick
     const l1 = generateLick({ progressionId: 'major-251', length: 'short', keyPc: 2, tier: 2, range, seed: 3 });
     const bytes = Array.from(atob(encodeLick(l1).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-    bytes[0] = (bytes[0] & 0x0f) | 0x10;
-    const v1 = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    const d = decodeLick(v1);
-    expect(d).not.toBeNull();
-    expect(d!.notes).toEqual(l1.notes);
+    bytes.splice(3, 1); // v1 and v2 have no Focus byte
+    const asVersion = (v: number): string => {
+      const o = [...bytes];
+      o[0] = (o[0] & 0x0f) | (v << 4);
+      return btoa(String.fromCharCode(...o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    };
+    for (const v of [1, 2]) {
+      const d = decodeLick(asVersion(v));
+      expect(d, `v${v}`).not.toBeNull();
+      expect(d!.notes).toEqual(l1.notes);
+      expect(d!.focus).toBeUndefined();
+    }
+  });
+
+  it('carries the Focus concept (version 3) and rejects an unknown one', () => {
+    for (const focus of ['guideTones', 'enclosures', 'chromaticApproach', 'anticipateI', 'triadPairs', 'sixthDim', 'superimposition'] as const) {
+      const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 5, tier: 3, range, seed: 11, concept: focus });
+      expect(l.focus).toBe(focus);
+      const d = decodeLick(encodeLick(l));
+      expect(d!.focus).toBe(focus);
+      expect(d!.notes).toEqual(l.notes);
+    }
+    const plain = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 5, tier: 3, range, seed: 11 });
+    expect(decodeLick(encodeLick(plain))!.focus).toBeUndefined();
   });
 
   it('sweep: every generated lick (instruments x progressions x lengths x targets x seeds) encodes and round-trips', () => {

@@ -95,6 +95,7 @@
     <section class="analysis" id="analysis" aria-labelledby="an-h" hidden>
       <h2 id="an-h" class="label">Analysis</h2>
       <div class="an-rows" id="an-rows"></div>
+      <ul class="an-devs small" id="an-devs" aria-label="Devices found" hidden></ul>
       <ul class="legend small" aria-label="Note colours">
         <li class="k-chord"><span class="mono">3</span> Chord tone</li>
         <li class="k-tension"><span class="mono">♭9</span> Tension</li>
@@ -143,6 +144,12 @@
       <p class="target-read" id="target-read"><strong id="target-tier"></strong> <span class="mono muted" id="target-score"></span></p>
       <p class="small muted" id="target-desc"></p>
       <p class="small warn" id="tier-hint" hidden></p>
+    </fieldset>
+    <fieldset class="group">
+      <legend class="label">Focus</legend>
+      <select id="sel-focus" aria-label="Focus" aria-describedby="focus-desc"></select>
+      <p class="small muted" id="focus-desc"></p>
+      <p class="small warn" id="focus-hint" hidden></p>
     </fieldset>
     <div class="group fields">
       <label class="field"><span class="label">Instrument</span><select id="sel-inst"></select></label>

@@ -1,5 +1,5 @@
-import type { ChordQualityId, Fragment } from '../types';
-import { TICKS_PER_16TH } from '../types';
+import type { ChordQualityId, FragTag, Fragment } from '../types';
+import { TICKS_PER_16TH, TPBAR } from '../types';
 import { SEED_FRAGMENTS } from './lib/seed';
 import { PROTOTYPE_FRAGMENTS } from './lib/prototype';
 import { ORIGINAL_FRAGMENTS } from './lib/original';
@@ -7,7 +7,9 @@ import { TRIPLET_FRAGMENTS } from './lib/triplets';
 import { VOCAB_FRAGMENTS } from './lib/vocab';
 import { ADVANCED_FRAGMENTS } from './lib/advanced';
 import { PHASE2B_FRAGMENTS } from './lib/phase2b';
+import { FOCUS_FRAGMENTS } from './lib/focus';
 import { parseNotes } from './lib/notation';
+import { detectDevices, type DeviceKind } from '../theory/devices';
 
 /**
  * Fragments in src/fragments/lib are AUTHORED in sixteenth-note units (1 = 16th, 2 = 8th, 4 = quarter,
@@ -81,14 +83,39 @@ function applyOverride(f: Fragment): Fragment {
 export const AUTHORED_FRAGMENTS: Fragment[] = [...SEED_FRAGMENTS, ...PROTOTYPE_FRAGMENTS.filter(f => !PROTOTYPE_DROP.has(f.id)), ...ORIGINAL_FRAGMENTS].map(applyOverride);
 
 /** The Phase 2 vocabulary (lib/vocab.ts, lib/advanced.ts, lib/phase2b.ts), also authored in 16ths. Kept apart from AUTHORED_FRAGMENTS, which some tests pin. */
-export const VOCABULARY_FRAGMENTS: Fragment[] = [...VOCAB_FRAGMENTS, ...ADVANCED_FRAGMENTS, ...PHASE2B_FRAGMENTS].filter(f => !VOCAB_DROP.has(f.id));
+export const VOCABULARY_FRAGMENTS: Fragment[] = [...VOCAB_FRAGMENTS, ...ADVANCED_FRAGMENTS, ...PHASE2B_FRAGMENTS, ...FOCUS_FRAGMENTS].filter(f => !VOCAB_DROP.has(f.id));
 
 /**
  * Every fragment the generator may use, on the engine tick grid. Libraries that contain triplet durations
  * (lib/triplets.ts) are already parsed to engine ticks and are appended AFTER the scaled 16th-grid libraries,
  * so FRAGMENTS.slice(0, AUTHORED_FRAGMENTS.length) is exactly the scaled authored set (the vocabulary follows it).
  */
-export const FRAGMENTS: Fragment[] = [...AUTHORED_FRAGMENTS.map(fromSixteenths), ...VOCABULARY_FRAGMENTS.map(fromSixteenths), ...TRIPLET_FRAGMENTS];
+/**
+ * Focus tags are derived from the notes, so they cannot drift from what the Analyze view finds (src/theory/devices.ts):
+ *  - enclosure / chromatic / triad-pair / sixth-dim / superimposition: the detector fires on the cell over one of its chords;
+ * Only adds tags, never removes one; the input is not mutated.
+ */
+export function withDeviceTags(f: Fragment): Fragment {
+  const add = new Set<FragTag>();
+  let t = TPBAR; // the cell sits one bar into a chord, so its first note is not "the start of a chord"
+  const timed = f.notes.map(n => { const r = { rel: n.rel, start: t, dur: n.dur, tie: n.tie }; t += n.dur; return r; });
+  const seen = new Map<DeviceKind, number>();
+  for (const q of f.qualities) {
+    const notes = timed.map(n => ({ midi: n.rel == null ? null : 60 + n.rel, start: n.start, dur: n.dur, ...(n.tie ? { tie: true } : {}), chord: 0 }));
+    for (const k of new Set(detectDevices({ notes, chords: [{ rootPc: 0, quality: q, symbol: '', start: 0, dur: t }] }).map(d => d.kind))) seen.set(k, (seen.get(k) ?? 0) + 1);
+  }
+  const all = (k: DeviceKind): boolean => seen.get(k) === f.qualities.length; // the device must be there over every chord the cell serves
+  if (all('enclosure')) add.add('enclosure');
+  if (all('chromatic')) add.add('chromatic');
+  if (all('triadPair')) add.add('triad-pair');
+  if (all('sixthDim')) add.add('sixth-dim');
+  if (all('superimposition') || all('sideSlip')) add.add('superimposition');
+
+  const fresh = [...add].filter(x => !f.tags.includes(x));
+  return fresh.length ? { ...f, tags: [...f.tags, ...fresh] } : f;
+}
+
+export const FRAGMENTS: Fragment[] = [...AUTHORED_FRAGMENTS.map(fromSixteenths), ...VOCABULARY_FRAGMENTS.map(fromSixteenths), ...TRIPLET_FRAGMENTS].map(withDeviceTags);
 
 export const fragmentsFor = (q: ChordQualityId, beats?: 2 | 4): Fragment[] =>
   FRAGMENTS.filter(f => f.qualities.includes(q) && (beats === undefined || f.beats === beats));

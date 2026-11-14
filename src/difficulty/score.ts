@@ -1,7 +1,7 @@
 import type { DifficultyFeature, DifficultyResult, LickChord, LickNote, ProgressionDef, Tier } from '../types';
 import { ALTERED_RELS, inScale, isChordTone, isChordToneOrTension } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
-import { TICKS_PER_16TH as S16, TPB } from '../types';
+import { TICKS_PER_16TH as S16, TIER_NAMES, TPB } from '../types';
 import { beatOf, findTupletGroups, isTupletDur, judgedChord, type TupletKind } from '../theory/rhythm';
 
 /**
@@ -49,11 +49,28 @@ const TRIPLET_FULL = 4;
 
 const ramp = (v: number, lo: number, hi: number): number => Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
 
+/**
+ * The simplest tier a progression can be asked for: its harmony alone costs `harmony x complexity` points and even the plainest lick
+ * adds a couple more (Coltrane changes: 6.4 + 2 > 7, so a Beginner target comes out Intermediate).
+ */
+export function plainestTier(progression: Pick<ProgressionDef, 'complexity'>): Tier {
+  return tierForScore(FEATURE_MAX.harmony * progression.complexity + 2);
+}
+
 export function tierForScore(score: number): Tier {
   if (score < TIER_THRESHOLDS[0]) return 1;
   if (score < TIER_THRESHOLDS[1]) return 2;
   if (score < TIER_THRESHOLDS[2]) return 3;
   return 4;
+}
+
+/** The warning under the slider when the target is below what a progression is usually played at (null: none). */
+export function tierHint(prog: Pick<ProgressionDef, 'name' | 'complexity' | 'minTier'>, tier: Tier): string | null {
+  const plain = plainestTier(prog);
+  // the harmony alone outweighs the target: the easiest lick there is already the plain tier, not "very simple"
+  if (tier < plain) return `${prog.name} starts at ${TIER_NAMES[plain]}: this lick is as simple as they get.`;
+  if (tier < prog.minTier) return `${prog.name} is usually ${TIER_NAMES[prog.minTier]} material, so ${TIER_NAMES[tier]} licks here will be very simple.`;
+  return null;
 }
 
 /** Whole-number score for display that never rounds across a tier threshold (14.6 shows as 14, still Intermediate). */
@@ -152,7 +169,7 @@ export function scoreLick(notes: LickNote[], chords: LickChord[], progression: P
   const syncPerBeat = sync / beats;
 
   // chromaticism and altered tensions relative to the chord each note belongs to (anticipation heads: the arrival chord)
-  const lydian = chords.map((_, i) => progression.slots[i]?.roman === '♭II7' || progression.slots[i]?.roman === '♭VII7');
+  const lydian = chords.map((_, i) => progression.slots[i]?.fn === 'lydianDom');
   const chordOf = (a: Attack): LickChord => chords[a.chord] ?? chords[0];
   let chroma = 0;
   let nct = 0;

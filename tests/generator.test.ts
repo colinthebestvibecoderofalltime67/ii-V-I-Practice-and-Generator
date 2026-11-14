@@ -4,10 +4,10 @@ import { INSTRUMENTS, concertRange, getInstrument } from '../src/instruments';
 import { generateLick, transposeLick } from '../src/generator';
 import { posToScore, scoreLick, tierForScore } from '../src/difficulty/score';
 import { isChordToneOrTension, CHORDS } from '../src/theory/chords';
-import { LENGTHS, PROGRESSIONS, expandProgression, getProgression } from '../src/theory/progressions';
+import { LENGTHS, PROGRESSIONS, expandProgression, getProgression, totalTicks } from '../src/theory/progressions';
 import { mod12 } from '../src/theory/pitch';
 import { findTupletGroups, isTupletDur } from '../src/theory/rhythm';
-import { RENDERABLE_DURS, TICKS_PER_16TH, TPB, TPBAR, type Lick, type LengthId, type Tier } from '../src/types';
+import { RENDERABLE_DURS, TICKS_PER_16TH, TPBAR, type Lick, type LengthId, type Tier } from '../src/types';
 
 const INSTS = ['alto', 'trumpet', 'trombone', 'bass'];
 const SEEDS = 12;
@@ -22,7 +22,7 @@ const RANGE_TOL = 0;
 function checkInvariants(lick: Lick, range: [number, number], label: string) {
   const def = getProgression(lick.progressionId);
   expect(lick.chords, label).toEqual(expandProgression(def, lick.length, lick.keyPc));
-  const total = LENGTHS[lick.length].beats.reduce((a, b) => a + b, 0) * TPB;
+  const total = totalTicks(def, lick.length);
   expect(lick.totalTicks, label).toBe(total);
   let t = 0;
   lick.notes.forEach((n, i) => {
@@ -77,6 +77,15 @@ function checkInvariants(lick: Lick, range: [number, number], label: string) {
   expect(lick.difficulty, label).toEqual(scoreLick(lick.notes, lick.chords, def));
 }
 
+/**
+ * Tiers a progression cannot reach however simple the lick: Coltrane's harmony alone is worth 0.8 x 8 = 6.4 difficulty points
+ * (Beginner is below 7) and even the plainest licks over seven chords score about 8, so a Beginner request there is answered
+ * with the simplest Intermediate lick (the sidebar hint says Coltrane is Advanced material). Every other (progression, tier) is held to the thresholds.
+ */
+const unreachable = (progressionId: string, tier: Tier): boolean => progressionId === 'coltrane' && tier === 1;
+/** The same floor for slider targets: no Coltrane lick scores below about 8, so a target under 8 cannot be met (the tier check still applies above it). */
+const belowFloor = (progressionId: string, target: number): boolean => progressionId === 'coltrane' && target < 8;
+
 const strip = (l: Lick) => ({ ...l, createdAt: 0 });
 
 describe('generateLick invariants', () => {
@@ -96,6 +105,7 @@ describe('generateLick invariants', () => {
             expect(lick.seed).toBe(seed);
             expect(lick.fragmentIds.length).toBeGreaterThan(0);
             checkInvariants(lick, range, label);
+            if (unreachable(p.id, tier)) continue;
             hits[tier].n++;
             if (lick.difficulty.tier === tier) hits[tier].hit++;
           }
@@ -150,6 +160,12 @@ describe('determinism and options', () => {
         const f = FRAGMENTS.find(x => x.id === lastId);
         if (f) expect(f.ending, `${p.id} t${tier} ends with ${lastId}`).toBe(true);
         else expect(lastId.startsWith('synth-')).toBe(true);
+        // ... and no other cell is: interior tonics (Coltrane's A-flat and E major) are passing chords, not endings
+        for (const id of l.fragmentIds.slice(0, -1)) {
+          const g = FRAGMENTS.find(x => x.id === id);
+          if (g) expect(g.ending, `${p.id} t${tier} interior cell ${id}`).toBeFalsy();
+          else expect(id.startsWith('synth-') && !id.endsWith('-end'), `${p.id} interior synth ${id}`).toBe(true);
+        }
       }
     }
   });
@@ -201,6 +217,7 @@ describe('targetScore (difficulty slider)', () => {
             checkInvariants(lick, range, `${p.id}/${length}/pos${pos}`);
             expect(lick.targetScore).toBe(target);
             expect(lick.requestedTier).toBe(tierForScore(target));
+            if (belowFloor(p.id, target)) continue;
             errs.push(Math.abs(lick.difficulty.score - target));
             if (lick.difficulty.tier === tierForScore(target)) tierHit++;
             total++;

@@ -1,0 +1,71 @@
+import type { ConceptId, Instrument, LengthId, Lick, ProgressionDef, Tier } from '../types';
+import { TIER_NAMES, TPB } from '../types';
+import { analyzeLick, type LickAnalysis } from '../theory/analyze';
+import { CONCEPT_MIN_TIER, CONCEPT_NAME, DEVICE_LABEL, DEVICE_NAME, conceptAllowed, conceptAvailable, detectDevices, displayDevices, type DeviceSpan } from '../theory/devices';
+import { barOf } from '../theory/rhythm';
+import { formatSpelling, spellLick } from '../theory/spell';
+import type { DeviceMark } from '../render/notation';
+
+/** Pure text and mark helpers for the device brackets and the Analysis list (the DOM code lives in main.ts). */
+
+const DEGREE_WORD: Record<string, string> = {
+  R: 'root', '3': '3rd', '♭3': '♭3rd', '5': '5th', '♭5': '♭5th', '7': '7th', '♭7': '♭7th', '6': '6th', '9': '9th', '♭9': '♭9th', '♯9': '♯9th',
+  '11': '11th', '♯11': '♯11th', '13': '13th', '♭13': '♭13th',
+};
+
+export interface DeviceRow {
+  span: DeviceSpan;
+  /** "Enclosure" */
+  name: string;
+  /** "→ E (3rd of Cmaj7)" or "over G7alt" */
+  what: string;
+  /** "bar 3" */
+  where: string;
+  mark: DeviceMark;
+}
+
+/** Devices of a lick as rows for the Analysis list, plus the marks the renderer draws. Works on notes only (shared licks too). */
+export function deviceRows(lick: Lick, inst: Instrument, analysis: LickAnalysis = analyzeLick(lick, inst)): DeviceRow[] {
+  const spelled = spellLick(lick, inst);
+  return displayDevices(detectDevices(lick), lick.focus).map(span => {
+    const chord = analysis.chords[span.chord]?.symbol ?? '';
+    let what = chord ? `over ${chord}` : '';
+    if (span.target !== undefined && spelled[span.target]) {
+      const label = analysis.notes[span.target]?.label ?? '';
+      const word = DEGREE_WORD[label] ?? label;
+      what = `→ ${formatSpelling(spelled[span.target]!)}${word && chord ? ` (${word} of ${chord})` : ''}`;
+    }
+    if (span.kind === 'anticipation') {
+      // how early the note really is: the distance from its attack to the chord change
+      const early = lick.chords[span.chord].start - lick.notes[span.first].start;
+      what += early === TPB / 2 ? ', an eighth early' : early === TPB ? ', a beat early' : early > 0 ? `, ${early} ticks early` : '';
+    }
+    if (span.kind === 'sideSlip') what = `over ${chord}, resolving by step`;
+    return {
+      span, name: DEVICE_NAME[span.kind], what, where: `bar ${barOf(lick.notes[span.first].start) + 1}`,
+      mark: { kind: span.kind, first: span.first, last: span.last, label: DEVICE_LABEL[span.kind] },
+    };
+  });
+}
+
+const PLURAL: ConceptId[] = ['guideTones', 'enclosures', 'chromaticApproach', 'triadPairs'];
+
+/** The words for a progression length in a hint. */
+const LENGTH_WORD: Record<LengthId, string> = { short: 'short', standard: 'standard', long: 'long' };
+
+/**
+ * The note shown under the Focus menu when the concept is not offered at the chosen difficulty, or (given the progression and length)
+ * when the generator cannot deliver it there reliably (empty when it can). Not available -> say what to change instead of silently
+ * producing licks that miss the device.
+ */
+export function focusHint(concept: ConceptId, tier: Tier, prog?: Pick<ProgressionDef, 'id' | 'name'>, length?: LengthId, pos?: number): string {
+  if (!conceptAllowed(concept, tier)) {
+    return `${CONCEPT_NAME[concept]} ${PLURAL.includes(concept) ? 'are' : 'is'} ${TIER_NAMES[CONCEPT_MIN_TIER[concept]]}+ material \u2014 this lick ignores the focus.`;
+  }
+  if (!prog || !length || conceptAvailable(concept, prog.id, length, tier, pos)) return '';
+  const lens: LengthId[] = ['short', 'standard', 'long'];
+  const otherLen = lens.find(l => l !== length && conceptAvailable(concept, prog.id, l, tier));
+  const nextTier = ([1, 2, 3, 4] as Tier[]).find(t => t > tier && conceptAllowed(concept, t) && conceptAvailable(concept, prog.id, length, t));
+  const way = otherLen ? `a ${LENGTH_WORD[otherLen]} lick carries it` : nextTier ? `${TIER_NAMES[nextTier]} or above carries it` : 'pick another progression';
+  return `${CONCEPT_NAME[concept]} only sometimes fit ${prog.name} at ${TIER_NAMES[tier]} with a ${LENGTH_WORD[length]} lick \u2014 ${way}.`;
+}

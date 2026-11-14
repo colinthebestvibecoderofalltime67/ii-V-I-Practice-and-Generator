@@ -1,13 +1,15 @@
 import './styles.css';
-import type { Instrument, Lick, Tier } from './types';
+import type { ConceptId, Instrument, Lick, Tier } from './types';
 import { TIER_NAMES, TPBAR } from './types';
 import { barOf } from './theory/rhythm';
-import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
+import { LENGTHS, PROGRESSIONS, getProgression, lengthBars } from './theory/progressions';
 import { INSTRUMENTS, concertRange, concertRangeForLevel, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
-import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from './difficulty/score';
+import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore, tierHint } from './difficulty/score';
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
 import { renderLick, type NoteLabel } from './render/notation';
+import { CONCEPTS, CONCEPT_DESC, conceptAllowed, CONCEPT_NAME, CONCEPT_SHORT, isConceptId } from './theory/devices';
+import { deviceRows, focusHint, type DeviceRow } from './ui/devices';
 import { lickFingerings } from './render/tab';
 import { Player, type PassAction, type PlayOptions } from './audio/player';
 import { sessionStep, type SessionConfig } from './practice/session';
@@ -62,6 +64,9 @@ const SHORT_NAME: Record<string, string> = {
   'minor-251': 'Minor',
   'tritone-251': 'Tritone substitute',
   'backdoor-251': 'Backdoor',
+  'turnaround': 'Turnaround',
+  'chain-36251': 'Circle of fifths',
+  'coltrane': 'Coltrane',
 };
 const TIER_DESC: Record<Tier, string> = {
   1: 'Guide tones, simple rhythms',
@@ -73,7 +78,11 @@ const TIER_DESC: Record<Tier, string> = {
 /** "Imaj7" -> "I", "V7alt" -> "V7alt", "iiø7" -> "iiø", "i6" -> "i". */
 const romanShort = (r: string): string => r.replace(/maj7|7(?!alt)|6/g, '');
 const romansFor = (progressionId: string): string[] => getProgression(progressionId).slots.map(s => romanShort(s.roman));
-const lengthShort = (id: keyof typeof LENGTHS): string => /\((.*)\)/.exec(LENGTHS[id].label)?.[1] ?? LENGTHS[id].label;
+/** "3 bars": the real length of a progression at a length id (progressions of different chord counts differ). */
+const lengthShort = (progressionId: string, id: keyof typeof LENGTHS): string => {
+  const n = lengthBars(getProgression(progressionId), id);
+  return `${n} bar${n === 1 ? '' : 's'}`;
+};
 const instShort = (i: Instrument): string => i.name.replace(/\s*\(.*\)$/, '');
 
 /* ---------------------------------------------------------------- controls */
@@ -93,8 +102,9 @@ function buildStaticControls(): void {
   $('prog-list').replaceChildren(...PROGRESSIONS.map(p =>
     radio('prog', p.id, `<span>${SHORT_NAME[p.id] ?? p.name}</span><span class="roman">${romansFor(p.id).join(' ')}</span>`)));
   $('len-list').replaceChildren(...(Object.keys(LENGTHS) as (keyof typeof LENGTHS)[]).map(id =>
-    radio('len', id, `<span>${lengthShort(id)}</span>`)));
+    radio('len', id, '<span></span>')));
   $<HTMLSelectElement>('sel-inst').innerHTML = INSTRUMENTS.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
+  $<HTMLSelectElement>('sel-focus').innerHTML = [`<option value="any">Any</option>`, ...CONCEPTS.map(c => `<option value="${c}">${CONCEPT_NAME[c]}</option>`)].join('');
 }
 
 function fillKeyOptions(): void {
@@ -125,14 +135,22 @@ function syncControls(): void {
   syncTarget();
   $('t-analyze').setAttribute('aria-pressed', String(settings.analyze));
   setRadio('len', settings.length);
+  document.querySelectorAll<HTMLInputElement>('input[name="len"]').forEach(r => {
+    const span = r.parentElement?.querySelector('span');
+    if (span) span.textContent = lengthShort(settings.progressionId, r.value as keyof typeof LENGTHS);
+  });
   $<HTMLSelectElement>('sel-inst').value = settings.instrumentId;
   $<HTMLSelectElement>('sel-key').value = String(settings.key);
   $('prog-desc').textContent = prog.description;
   const hint = $('tier-hint');
-  if (targetTier() < prog.minTier) {
-    hint.hidden = false;
-    hint.textContent = `${prog.name} is usually ${TIER_NAMES[prog.minTier]} material, so ${TIER_NAMES[targetTier()]} licks here will be very simple.`;
-  } else hint.hidden = true;
+  const hintText = tierHint(prog, targetTier());
+  hint.hidden = !hintText;
+  hint.textContent = hintText;
+  $<HTMLSelectElement>('sel-focus').value = settings.focus;
+  $('focus-desc').textContent = settings.focus === 'any' ? 'No particular device: a mix of the usual vocabulary.' : CONCEPT_DESC[settings.focus];
+  const fh = settings.focus === 'any' ? '' : focusHint(settings.focus, targetTier(), prog, settings.length, settings.target);
+  $('focus-hint').hidden = !fh;
+  $('focus-hint').textContent = fh;
 
   check('c-swing', settings.swing);
   check('c-straight16', settings.straight16);
@@ -199,7 +217,7 @@ function syncTarget(): void {
 
 /* ---------------------------------------------------------------- analysis */
 
-let analysisFor: { lick: Lick; inst: Instrument; result: LickAnalysis } | null = null;
+let analysisFor: { lick: Lick; inst: Instrument; result: LickAnalysis; devices?: DeviceRow[] } | null = null;
 
 function currentAnalysis(): LickAnalysis | null {
   if (!lick) return null;
@@ -208,11 +226,32 @@ function currentAnalysis(): LickAnalysis | null {
   return analysisFor.result;
 }
 
+/** Devices found in the notes (enclosures, anticipations, triad pairs...), shown with Analyze whatever the Focus is. */
+function currentDevices(): DeviceRow[] {
+  const a = currentAnalysis();
+  if (!a || !lick || !analysisFor) return [];
+  return (analysisFor.devices ??= deviceRows(lick, inst(), a));
+}
+
 function renderAnalysis(): void {
   const panel = $('analysis');
   const a = settings.analyze ? currentAnalysis() : null;
   panel.hidden = !a;
   if (!a) return;
+  const devs = currentDevices();
+  const list = $('an-devs');
+  list.hidden = !devs.length;
+  list.replaceChildren(...devs.map(d => {
+    const li = document.createElement('li');
+    const k = document.createElement('span');
+    k.className = 'dv-k';
+    k.textContent = d.name;
+    const w = document.createElement('span');
+    w.className = 'dv-w';
+    w.textContent = d.where;
+    li.append(k, ` ${d.what}`, w);
+    return li;
+  }));
   $('an-rows').replaceChildren(...a.chords.map(c => {
     const row = document.createElement('div');
     row.className = 'an-row';
@@ -291,6 +330,7 @@ function renderNotation(): void {
     romans: romansFor(lick.progressionId),
     activeBar: activeBar(),
     noteLabels: noteLabels(),
+    ...(settings.analyze ? { devices: currentDevices().map(d => d.mark) } : {}),
     hideNotes: notesCovered() && settings.hideKeepChords,
   });
 }
@@ -335,7 +375,7 @@ function renderMeta(): void {
   $('lick-title').textContent = `${progressionName(lick)} in ${titleKeyLabel(lick, i)}`;
   const who = isTransposing(i) ? `${instShort(i)} · concert ${keyLabel(lick.keyPc, lick.mode)}` : instShort(i);
   const meta = $('lick-meta');
-  meta.replaceChildren(`${who} · ${lengthShort(lick.length)} · `);
+  meta.replaceChildren(`${who} · ${lengthShort(lick.progressionId, lick.length)} · `);
   if (lick.targetScore !== undefined) meta.append(`aimed for ${displayScore(lick.targetScore)} · scored ${displayScore(d.score)}`);
   else if (d.tier === lick.requestedTier) meta.append(`${TIER_NAMES[d.tier]}, as requested`);
   else {
@@ -344,6 +384,8 @@ function renderMeta(): void {
     s.textContent = `you asked for ${TIER_NAMES[lick.requestedTier]}; this came out ${TIER_NAMES[d.tier]}`;
     meta.append(s);
   }
+
+  if (lick.focus) meta.append(` · Focus: ${CONCEPT_SHORT[lick.focus]}`);
 
   updateBar();
   $('tier-name').textContent = TIER_NAMES[d.tier];
@@ -441,6 +483,7 @@ function generate(): void {
     comfortRange: concertRangeForLevel(inst(), targetTier()),
     avoid: history.slice(0, RECENT_LICKS).flatMap(e => e.lick.fragmentIds),
     seed: randomSeed(),
+    ...(settings.focus !== 'any' ? { concept: settings.focus } : {}),
   });
   showLick(l, true);
 }
@@ -664,6 +707,7 @@ async function doPdf(): Promise<void> {
     const { exportPdf } = await import('./export/pdf');
     await exportPdf(lick, inst(), {
       showTab: settings.showTab && !!inst().tab, tabPosition: tabIndex(), showFingers: settings.showFingers, noteLabels: noteLabels(),
+      ...(settings.analyze ? { devices: currentDevices().map(d => d.mark) } : {}),
     });
     exportStatus('PDF downloaded.', 3000);
   } catch (err) {
@@ -822,6 +866,10 @@ function bind(): void {
   onRadio('prog', v => { settings.progressionId = v; persist(); fillKeyOptions(); syncControls(); });
   const target = $<HTMLInputElement>('r-target');
   target.addEventListener('input', () => { settings.target = Math.round(Number(target.value)); persist(); syncControls(); });
+  $<HTMLSelectElement>('sel-focus').addEventListener('change', e => {
+    const v = (e.target as HTMLSelectElement).value;
+    setting('focus', isConceptId(v) ? (v as ConceptId) : 'any');
+  });
   $('t-analyze').addEventListener('click', () => setAnalyze(!settings.analyze));
   onRadio('len', v => setting('length', v as Settings['length']));
   $<HTMLSelectElement>('sel-inst').addEventListener('change', e => {
@@ -951,7 +999,7 @@ function updateBar(): void {
   // No aria-pressed: the visible label itself announces Play / Pause / Resume.
   $('pb-key').textContent = lick ? titleKeyLabel(lick, inst()) : '–';
   const st = $('status').textContent ?? '';
-  $('pb-bar').textContent = /Your turn$/.test(st) ? 'Your turn' : /Listen$/.test(st) ? 'Listen' : /^bar /.test(st) ? st.replace(' / ', '/') : /count/.test(st) ? st.replace(/.*: ?/, 'count ') : st === 'Paused' ? 'paused' : lick ? lengthShort(lick.length) : '';
+  $('pb-bar').textContent = /Your turn$/.test(st) ? 'Your turn' : /Listen$/.test(st) ? 'Listen' : /^bar /.test(st) ? st.replace(' / ', '/') : /count/.test(st) ? st.replace(/.*: ?/, 'count ') : st === 'Paused' ? 'paused' : lick ? lengthShort(lick.progressionId, lick.length) : '';
   updateRecap();
 }
 
@@ -960,7 +1008,7 @@ function updateRecap(): void {
   // the written key, like the title and key menu (alto in concert C reads A)
   const key = settings.key === 'random' ? 'Random key' : keyLabel((settings.key + inst().transpose) % 12, getProgression(settings.progressionId).mode);
   $('fold-recap').textContent =
-    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], instShort(inst()), key, lengthShort(settings.length)].join(' · ');
+    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], ...(settings.focus !== 'any' && conceptAllowed(settings.focus, targetTier()) ? [`Focus: ${CONCEPT_SHORT[settings.focus]}`] : []), instShort(inst()), key, lengthShort(settings.progressionId, settings.length)].join(' · ');
 }
 
 function setupPhoneBar(): void {

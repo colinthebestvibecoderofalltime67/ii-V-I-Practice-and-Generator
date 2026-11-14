@@ -127,10 +127,12 @@ function fragTripletKinds(f: Fragment): Set<TupletKind> {
   }
   return k;
 }
-function tripletFactor(f: Fragment, level: number): number {
+/** `tier` is the requested (target) tier: Beginner never gets triplets and 16th triplets need Expert, whatever the fractional level. */
+export function tripletFactor(f: Fragment, level: number, tier: Tier = Math.round(level) as Tier): number {
   const kinds = fragTripletKinds(f);
   if (!kinds.size) return 1;
-  if (kinds.has('t16') && level < 4) return 0;
+  if (tier === 1) return 0;
+  if (kinds.has('t16') && (level < 4 || tier < 4)) return 0;
   return lerpTable(TRIPLET_FACTOR_BY_LEVEL, level - 1);
 }
 const TRIPLET_FACTOR_BY_LEVEL = [TRIPLET_FACTOR[1], TRIPLET_FACTOR[2], TRIPLET_FACTOR[3], TRIPLET_FACTOR[4]];
@@ -178,7 +180,7 @@ function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
 }
 
 function buildPlan(
-  rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number,
+  rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number, tier: Tier,
 ): PlanItem[] {
   const plan: PlanItem[] = [];
   let beat = 0;
@@ -198,7 +200,7 @@ function buildPlan(
       const pool = pools.get(q, b as 2 | 4, ending);
       const frag = rng.weighted(pool, f => {
         let w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
-        w *= tripletFactor(f, level);
+        w *= tripletFactor(f, level, tier);
         if (f.id === prevId) w *= 0.15;
         if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
         return w;
@@ -377,7 +379,7 @@ export function generateLick(opts: GenerateOptions): Lick {
     const sharp = 1 + round * 0.8;
     const roundScores: number[] = [];
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp);
+      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier);
       const octaves = chooseOctaves(plan, chords, opts.range);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range);
@@ -385,7 +387,10 @@ export function generateLick(opts: GenerateOptions): Lick {
       const cost = lickCost(events, fragStarts, opts.range, fixes);
       const score = scoreLick(notes, chords, def).score;
       roundScores.push(score);
-      const dist = target !== undefined ? Math.abs(score - target) : tierDistance(score, reqTier);
+      // With a target, staying inside the target's tier outranks closeness (a target on a boundary must not land across it).
+      const dist = target !== undefined
+        ? (tierDistance(score, reqTier) > 0 ? 1000 : 0) + Math.abs(score - target)
+        : tierDistance(score, reqTier);
       if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist };
     }
     if (best && best.dist <= tol) break;
@@ -420,7 +425,10 @@ export function generateLick(opts: GenerateOptions): Lick {
   };
 }
 
-/** Shift a lick to a new tonic; respell chords; re-fit the octave to `range`. Rhythm, intervals, difficulty unchanged. */
+/**
+ * Shift a lick to a new tonic; respell chords; re-fit the octave to `range`, then fold any notes still outside it
+ * (see foldIntoRange). Rhythm and pitch classes never change; intervals and difficulty change only if folding was needed.
+ */
 export function transposeLick(lick: Lick, keyPc: number, range: [number, number]): Lick {
   const def = getProgression(lick.progressionId);
   const newKey = mod12(keyPc);
@@ -445,7 +453,9 @@ export function transposeLick(lick: Lick, keyPc: number, range: [number, number]
     }
   }
   const chords = expandProgression(def, lick.length, newKey);
-  const notes: LickNote[] = lick.notes.map(n => ({ ...n, midi: n.midi == null ? null : n.midi + bestShift }));
+  const shifted: LickNote[] = lick.notes.map(n => ({ ...n, midi: n.midi == null ? null : n.midi + bestShift }));
+  const notes = foldIntoRange(shifted, range);
+  const folded = notes.some((n, i) => n.midi !== shifted[i].midi);
   return {
     ...lick,
     id: makeId(lick.progressionId, lick.length, newKey, lick.requestedTier, lick.seed),
@@ -454,8 +464,71 @@ export function transposeLick(lick: Lick, keyPc: number, range: [number, number]
     notes,
     fragmentIds: [...lick.fragmentIds],
     ...(Array.isArray(lick.cellStarts) ? { cellStarts: [...lick.cellStarts] } : {}),
-    difficulty: { ...lick.difficulty, features: lick.difficulty.features.map(f => ({ ...f })) },
+    // Unchanged when the lick was only shifted as a whole; re-scored when folding altered the contour (register/leaps).
+    difficulty: folded
+      ? scoreLick(notes, chords, def)
+      : { ...lick.difficulty, features: lick.difficulty.features.map(f => ({ ...f })) },
     createdAt: Date.now(),
   };
+}
+
+/**
+ * Octave-fold every pitched note that is outside `range` into it (pitch classes and rhythm untouched; in-range notes
+ * never move; tied notes stay together). Choice is a Viterbi pass over the folded notes minimising how much each
+ * leap differs from the original leap, so a run of out-of-range notes between in-range neighbours moves as one
+ * phrase rather than as scattered single-note jumps. Ties break toward the smaller displacement. Deterministic.
+ */
+export function foldIntoRange(notes: LickNote[], range: [number, number]): LickNote[] {
+  const [lo, hi] = range;
+  // units: pitched notes joined by ties share one pitch
+  const unitOf: number[] = new Array(notes.length).fill(-1);
+  const orig: number[] = [];
+  let prev = -1;
+  notes.forEach((n, i) => {
+    if (n.midi == null) { prev = -1; return; }
+    const pn = i > 0 ? notes[i - 1] : null;
+    if (prev >= 0 && pn && pn.tie && pn.midi === n.midi) unitOf[i] = prev;
+    else { unitOf[i] = orig.length; orig.push(n.midi); }
+    prev = unitOf[i];
+  });
+  if (!orig.some(m => m < lo || m > hi)) return notes;
+  const cands: number[][] = orig.map(m => {
+    if (m >= lo && m <= hi) return [m];
+    const c: number[] = [];
+    for (let k = -8; k <= 8; k++) {
+      const q = m + 12 * k;
+      if (q >= lo && q <= hi) c.push(q);
+    }
+    if (!c.length) c.push(Math.min(hi, Math.max(lo, m))); // range narrower than an octave: clamp (not expected)
+    return c.sort((a, b) => Math.abs(a - m) - Math.abs(b - m) || a - b);
+  });
+  const n = orig.length;
+  const cost: number[][] = [];
+  const back: number[][] = [];
+  cost[0] = cands[0].map(q => Math.abs(q - orig[0]) * 0.01);
+  back[0] = cands[0].map(() => -1);
+  for (let i = 1; i < n; i++) {
+    cost[i] = [];
+    back[i] = [];
+    const oi = orig[i] - orig[i - 1];
+    cands[i].forEach(q => {
+      let best = Infinity;
+      let bj = 0;
+      cands[i - 1].forEach((p, j) => {
+        const c = cost[i - 1][j] + Math.abs(q - p - oi);
+        if (c < best) { best = c; bj = j; }
+      });
+      cost[i].push(best + Math.abs(q - orig[i]) * 0.01);
+      back[i].push(bj);
+    });
+  }
+  let j = 0;
+  for (let k = 1; k < cost[n - 1].length; k++) if (cost[n - 1][k] < cost[n - 1][j]) j = k;
+  const pick: number[] = new Array(n);
+  for (let i = n - 1; i >= 0; i--) {
+    pick[i] = cands[i][j];
+    j = back[i][j];
+  }
+  return notes.map((nt, i) => (unitOf[i] < 0 ? nt : { ...nt, midi: pick[unitOf[i]] }));
 }
 

@@ -1,7 +1,7 @@
 import type { LengthId, LickChord, ProgressionDef } from '../types';
 import { TPB } from '../types';
-import { CHORDS } from './chords';
-import { chordRootName, mod12 } from './pitch';
+import { mod12 } from './pitch';
+import { chordSymbolText, spellChordRoot } from './spell';
 
 /**
  * Registry of progressions. To add one, append an entry here; if it uses a new chord
@@ -77,7 +77,7 @@ export function expandProgression(def: ProgressionDef, length: LengthId, keyPc: 
     const c: LickChord = {
       rootPc,
       quality: s.quality,
-      symbol: chordRootName(rootPc, keyPc, def.mode) + CHORDS[s.quality].suffix,
+      symbol: chordSymbolText(spellChordRoot(rootPc, s.quality, keyPc, def.mode), s.quality),
       start,
       dur,
     };

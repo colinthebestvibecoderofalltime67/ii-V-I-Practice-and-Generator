@@ -5,7 +5,7 @@ import { barOf } from './theory/rhythm';
 import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
 import { INSTRUMENTS, concertRange, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
-import { FEATURE_MAX, posToScore, scoreToPos, tierForScore } from './difficulty/score';
+import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from './difficulty/score';
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
 import { renderLick, type NoteLabel } from './render/notation';
 import { lickFingerings } from './render/tab';
@@ -13,7 +13,7 @@ import { Player, type PlayOptions } from './audio/player';
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
 import { Library } from './ui/library';
-import { downloadBlob, fileName, isTransposing, keyLabel, progressionName, writtenKeyLabel } from './ui/format';
+import { downloadBlob, fileName, isTransposing, keyLabel, progressionName, titleKeyLabel } from './ui/format';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -26,12 +26,16 @@ const settings: Settings = store.loadSettings();
 let history: StoredEntry[] = store.loadHistory();
 let favorites: StoredEntry[] = store.loadFavorites();
 let lick: Lick | null = null;
+/** The lick as generated or loaded, before any refit. Refits always start from it, so folding notes into a
+ * narrow range (e.g. bass) is undone when switching back to a wider instrument. */
+let sourceLick: Lick | null = null;
 let highlight: number[] = [];
 const player = new Player();
 
 const inst = (): Instrument => getInstrument(settings.instrumentId);
 const persist = (): void => store.saveSettings(settings);
-const effectiveBpm = (): number => (settings.slow ? Math.round(settings.bpm * 0.6) : settings.bpm);
+/** Slow practice is 60% of the tempo but never below the player's 40 bpm floor, so display, playback and MIDI agree. */
+const effectiveBpm = (): number => (settings.slow ? Math.max(40, Math.round(settings.bpm * 0.6)) : settings.bpm);
 const targetTier = (): Tier => tierForScore(posToScore(settings.target));
 
 /** Highlight colour on the (always white) notation sheet. */
@@ -83,10 +87,17 @@ function buildStaticControls(): void {
 }
 
 function fillKeyOptions(): void {
-  const mode = getProgression(settings.progressionId).mode;
+  // Labels follow the lick on screen (its mode), not the sidebar progression.
+  const mode = lick ? lick.mode : getProgression(settings.progressionId).mode;
   const sel = $<HTMLSelectElement>('sel-key');
   let html = '<option value="random">Random</option>';
-  for (let pc = 0; pc < 12; pc++) html += `<option value="${pc}">${keyLabel(pc, mode)}</option>`;
+  // Transposing instruments read the written key (matching the title); the concert key follows in brackets.
+  const t = inst().transpose;
+  for (let pc = 0; pc < 12; pc++) {
+    const concert = keyLabel(pc, mode);
+    const label = t % 12 === 0 ? concert : `${keyLabel((pc + t) % 12, mode)} (concert ${concert})`;
+    html += `<option value="${pc}">${label}</option>`;
+  }
   sel.innerHTML = html;
   sel.value = String(settings.key);
 }
@@ -130,7 +141,7 @@ function syncControls(): void {
   check('c-midi', settings.midiBacking);
   $<HTMLInputElement>('r-bpm').value = String(settings.bpm);
   $('bpm-val').textContent = String(effectiveBpm());
-  $('bpm-val').title = settings.slow ? `Slow practice: 60% of ${settings.bpm}` : '';
+  $('bpm-val').title = settings.slow ? `Slow practice: 60% of ${settings.bpm} (minimum 40)` : '';
   $<HTMLSelectElement>('sel-comp').value = settings.comp;
   $<HTMLInputElement>('r-lead').value = String(settings.leadVolume);
   $<HTMLInputElement>('r-piano').value = String(settings.pianoVolume);
@@ -146,7 +157,7 @@ function syncControls(): void {
 
 function syncTarget(): void {
   const tier = targetTier();
-  const score = Math.round(posToScore(settings.target));
+  const score = displayScore(posToScore(settings.target));
   const r = $<HTMLInputElement>('r-target');
   r.value = String(settings.target);
   r.style.setProperty('--pos', String(settings.target / 100));
@@ -264,11 +275,11 @@ function renderMeta(): void {
   if (!lick) return;
   const d = lick.difficulty;
   const i = inst();
-  $('lick-title').textContent = `${progressionName(lick)} in ${keyLabel(lick.keyPc, lick.mode)}`;
-  const who = isTransposing(i) ? `${instShort(i)}, written in ${writtenKeyLabel(lick, i)}` : instShort(i);
+  $('lick-title').textContent = `${progressionName(lick)} in ${titleKeyLabel(lick, i)}`;
+  const who = isTransposing(i) ? `${instShort(i)} · concert ${keyLabel(lick.keyPc, lick.mode)}` : instShort(i);
   const meta = $('lick-meta');
   meta.replaceChildren(`${who} · ${lengthShort(lick.length)} · `);
-  if (lick.targetScore !== undefined) meta.append(`aimed for ${Math.round(lick.targetScore)} · scored ${Math.round(d.score)}`);
+  if (lick.targetScore !== undefined) meta.append(`aimed for ${displayScore(lick.targetScore)} · scored ${displayScore(d.score)}`);
   else if (d.tier === lick.requestedTier) meta.append(`${TIER_NAMES[d.tier]}, as requested`);
   else {
     const s = document.createElement('span');
@@ -278,7 +289,7 @@ function renderMeta(): void {
   }
 
   $('tier-name').textContent = TIER_NAMES[d.tier];
-  const score = Math.round(d.score);
+  const score = displayScore(d.score);
   $('tier-score').textContent = `${score} / 100`;
   const pct = scoreToPos(d.score);
   $('scale-fill').style.width = `${pct}%`;
@@ -340,8 +351,9 @@ function stopPlayback(): void {
   updateTransport();
 }
 
-function showLick(l: Lick, record: boolean, replaceId?: string): void {
+function showLick(l: Lick, record: boolean, replaceId?: string, refitted = false): void {
   lick = l;
+  if (!refitted) sourceLick = l;
   highlight = [];
   if (record) {
     if (replaceId && replaceId !== l.id) history = store.removeHistory(replaceId);
@@ -377,7 +389,8 @@ function refit(keyPc: number): void {
   if (!lick) return;
   stopPlayback();
   const old = lick.id;
-  showLick(transposeLick(lick, keyPc, concertRange(inst())), true, old);
+  const base = sourceLick && sourceLick.id === old ? sourceLick : lick;
+  showLick(transposeLick(base, keyPc, concertRange(inst())), true, old, true);
 }
 
 function restartIfPlaying(): void {
@@ -513,6 +526,7 @@ function bind(): void {
     },
     onRemoveFavorite: id => { favorites = store.removeFavorite(id); updateFav(); },
     onClearHistory: () => { store.clearHistory(); history = []; },
+    isTransposing: () => isTransposing(inst()),
   });
   const dialogs = [setupDialog('sound', 'btn-sound'), setupDialog('keys', 'btn-keys')];
   setupExportMenu();
@@ -536,7 +550,7 @@ function bind(): void {
   onRadio('len', v => setting('length', v as Settings['length']));
   $<HTMLSelectElement>('sel-inst').addEventListener('change', e => {
     settings.instrumentId = (e.target as HTMLSelectElement).value;
-    persist(); syncControls();
+    persist(); syncControls(); fillKeyOptions();
     if (lick) refit(lick.keyPc); // refit octave, keep key
   });
   $<HTMLSelectElement>('sel-key').addEventListener('change', e => {
@@ -573,6 +587,7 @@ function bind(): void {
     if (!lick) return;
     favorites = favorites.some(f => f.lick.id === lick!.id) ? store.removeFavorite(lick.id) : store.addFavorite(lick);
     updateFav();
+    if (!store.lastWriteOk) exportStatus('Could not save: browser storage is full or blocked.', 5000);
   });
   const bpm = $<HTMLInputElement>('r-bpm');
   bpm.addEventListener('input', () => { settings.bpm = Number(bpm.value); persist(); syncControls(); });

@@ -168,7 +168,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 #score { min-height: 120px; }
 #score.hidden { visibility: hidden; }
 #score .err { color: #b4301a; font: 13px var(--mono); padding: 12px; }
-.cover { display: none; position: absolute; inset: 0; align-items: center; justify-content: center; color: var(--muted-2); font-size: 18px; font-weight: 500; }
+.cover { display: none; position: absolute; inset: 0; align-items: center; justify-content: center; color: var(--sheet-ink); font-size: 18px; font-weight: 500; }
 .paper.covered .cover { display: flex; }
 
 /* ---------- playback ---------- */

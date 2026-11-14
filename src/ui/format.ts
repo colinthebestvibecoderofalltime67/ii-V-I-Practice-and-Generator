@@ -17,15 +17,24 @@ export function writtenKeyLabel(lick: Lick, inst: Instrument): string {
   return keyLabel(mod12(lick.keyPc + inst.transpose), lick.mode);
 }
 
+/** Title key: the key the player reads (concert key for non-transposing instruments). */
+export const titleKeyLabel = (lick: Lick, inst: Instrument): string => writtenKeyLabel(lick, inst);
+
 export const isTransposing = (inst: Instrument): boolean => mod12(inst.transpose) !== 0;
 
 export const tierName = (t: Tier): string => TIER_NAMES[t];
 
-/** ASCII-only file name, e.g. lick-major-251-Eb-advanced.mid */
-export function fileName(lick: Lick, ext: string): string {
-  const key = pcName(lick.keyPc, lick.keyPc, lick.mode) + (lick.mode === 'minor' ? 'm' : '');
+/**
+ * ASCII-only file name, e.g. lick-major-251-Eb-advanced.mid. Pass the instrument for a written part (PDF): a
+ * transposing instrument's file is named by the key the player reads, plus the instrument, e.g.
+ * lick-major-251-F-alto-advanced.pdf. MIDI sounds at concert pitch, so it keeps the concert key.
+ */
+export function fileName(lick: Lick, ext: string, inst?: Instrument): string {
+  const written = inst && isTransposing(inst);
+  const pc = written ? mod12(lick.keyPc + inst.transpose) : lick.keyPc;
+  const key = pcName(pc, pc, lick.mode) + (lick.mode === 'minor' ? 'm' : '');
   const tier = TIER_NAMES[lick.difficulty.tier].toLowerCase();
-  return `lick-${lick.progressionId}-${key}-${tier}.${ext}`;
+  return `lick-${lick.progressionId}-${key}${written ? `-${inst.id}` : ''}-${tier}.${ext}`;
 }
 
 export const progressionName = (lick: Lick): string => getProgression(lick.progressionId).name;

@@ -88,7 +88,13 @@ function fillKeyOptions(): void {
   const mode = lick ? lick.mode : getProgression(settings.progressionId).mode;
   const sel = $<HTMLSelectElement>('sel-key');
   let html = '<option value="random">Random</option>';
-  for (let pc = 0; pc < 12; pc++) html += `<option value="${pc}">${keyLabel(pc, mode)}</option>`;
+  // Transposing instruments read the written key (matching the title); the concert key follows in brackets.
+  const t = inst().transpose;
+  for (let pc = 0; pc < 12; pc++) {
+    const concert = keyLabel(pc, mode);
+    const label = t % 12 === 0 ? concert : `${keyLabel((pc + t) % 12, mode)} (concert ${concert})`;
+    html += `<option value="${pc}">${label}</option>`;
+  }
   sel.innerHTML = html;
   sel.value = String(settings.key);
 }
@@ -539,7 +545,7 @@ function bind(): void {
   onRadio('len', v => setting('length', v as Settings['length']));
   $<HTMLSelectElement>('sel-inst').addEventListener('change', e => {
     settings.instrumentId = (e.target as HTMLSelectElement).value;
-    persist(); syncControls();
+    persist(); syncControls(); fillKeyOptions();
     if (lick) refit(lick.keyPc); // refit octave, keep key
   });
   $<HTMLSelectElement>('sel-key').addEventListener('change', e => {

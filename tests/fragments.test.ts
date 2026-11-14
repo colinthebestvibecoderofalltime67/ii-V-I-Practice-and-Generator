@@ -293,7 +293,7 @@ describe('advanced vocabulary (levels 3-4)', () => {
   it('rhythmic displacement: a three- or five-note motif restated through eight 8ths, or dotted-8th groupings', () => {
     const eighth = 2 * 3;
     const cyc = adv.filter(f => f.beats === 4 && f.notes.length === 8 && f.notes.every(n => n.dur === eighth) && f.tags.includes('motif') && f.notes[0].rel !== null);
-    expect(cyc.length).toBeGreaterThanOrEqual(8);
+    expect(cyc.length).toBeGreaterThanOrEqual(5); // the repeated-motif oscillation cells (m7-adv-03, dom7-adv-01/02) were dropped as noodling
     const dotted = adv.filter(f => f.notes.some(n => n.dur === 9) && f.notes.some(n => n.dur === 6));
     expect(dotted.length).toBeGreaterThanOrEqual(4);
     // a cycled motif really repeats its first notes (cyclic shift against the 4-beat bar)
@@ -303,7 +303,7 @@ describe('advanced vocabulary (levels 3-4)', () => {
       expect(p, f.id).toBeDefined();
     }
     // off-beat statement restated on beat 3: starts with an 8th rest
-    expect(adv.filter(f => f.notes[0].rel === null).length).toBeGreaterThanOrEqual(3);
+    expect(adv.filter(f => f.notes[0].rel === null).length).toBeGreaterThanOrEqual(2);
   });
 
   it('triad pairs: 7alt uses only the bVI (b13 R #9) and bV (#11 b7 b9) triads', () => {

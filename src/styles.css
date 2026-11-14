@@ -85,6 +85,8 @@ button, input, select { font: inherit; color: inherit; }
 .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .btn[aria-pressed="true"] svg path { fill: currentColor; }
 .btn:disabled, .tbtn:disabled { opacity: .45; cursor: not-allowed; }
+.check[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.check[aria-disabled="true"] input { cursor: not-allowed; }
 .tbtn {
   display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 10px;
   border: 0; border-radius: var(--radius); background: transparent; font-weight: 500; cursor: pointer;
@@ -272,6 +274,17 @@ dialog::backdrop { background: rgba(20, 20, 18, .35); }
 .keys dd { margin: 0; }
 .keys kbd { opacity: 1; padding: 2px 6px; border: 1px solid var(--field); border-radius: 4px; }
 
+/* 12-key drill (C1) */
+.drill { display: flex; flex-direction: column; gap: 10px; }
+.drill-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.drill-row select { flex: 1; min-width: 0; }
+#sel-drill-rep { flex: none; width: 4.6em; }
+.drill-row input[type="number"] {
+  width: 4.6em; min-height: 40px; padding: 0 8px; border: 1px solid var(--field); border-radius: var(--radius);
+  background: var(--field-bg); font-variant-numeric: tabular-nums;
+}
+.drill-row label { cursor: default; }
+
 /* library */
 .tabs { display: flex; gap: 20px; padding: 0 20px; border-bottom: 1px solid var(--rule); }
 .tabs button { min-height: 44px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); cursor: pointer; padding: 0; }
@@ -294,7 +307,7 @@ dialog::backdrop { background: rgba(20, 20, 18, .35); }
   :root { --gutter: 16px; }
   .appbar > .wrap { min-height: 52px; }
   .brand-tag { display: none; }
-  .shell { flex-direction: column; }
+  .shell { flex-direction: column; flex-wrap: nowrap; } /* wrapping let the sheet's width stretch the whole column past a 320px screen */
   .side { order: 2; max-width: none; flex: none; padding: 22px 0 24px; border-top: 1px solid var(--rule); gap: 20px; }
   .side-h { position: static; width: auto; height: auto; overflow: visible; clip: auto; font-size: 16px; font-weight: 600; }
   .main { padding: 18px 0 8px; gap: 20px; flex: none; border-left: 0; }
@@ -320,4 +333,47 @@ dialog::backdrop { background: rgba(20, 20, 18, .35); }
   .radio-list.tiers input { margin-top: 0; }
   .gen { min-height: 50px; font-size: 16px; }
   .foot { padding: 16px 0; }
+}
+
+/* ---------- phone practice bar (desktop: hidden, settings fold stays open) ---------- */
+.pbar { display: none; }
+.fold-sum { display: none; }
+.fold-body { display: flex; flex-direction: column; gap: 26px; }
+@media (max-width: 760px) {
+  .pbar {
+    display: flex; align-items: center; gap: 6px; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    padding: 8px max(12px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    background: var(--bg); border-top: 1px solid var(--rule);
+  }
+  .pbar .btn { min-height: 48px; }
+  .pbar .btn.square { width: 44px; min-width: 44px; padding: 0; font-size: 18px; }
+  .pb-play { min-width: 92px; padding: 0 14px; gap: 6px; flex: none; }
+  .pb-next { min-width: 64px; padding: 0 12px; flex: none; }
+  .pb-key { display: flex; align-items: center; gap: 2px; margin-left: auto; min-width: 0; }
+  .pb-read { margin: 0; min-width: 62px; text-align: center; display: flex; flex-direction: column; line-height: 1.2; font-size: 15px; font-weight: 500; }
+  .pb-read .muted { font-size: 11px; font-weight: 400; white-space: nowrap; }
+  body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  /* the bar replaces the inline Play and Generate buttons (display:none so they leave the tab order) */
+  #btn-play, #btn-gen { display: none; }
+  .pb-main .pos { margin-left: 0; }
+  .fold-body { gap: 20px; }
+  .fold-sum {
+    display: flex; flex-direction: column; gap: 2px; padding: 4px 0; min-height: 44px; justify-content: center; cursor: pointer; list-style: none;
+  }
+  .fold-sum::-webkit-details-marker { display: none; }
+  .fold-name { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .fold-name::after { content: ""; width: 7px; height: 7px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg) translateY(-2px); }
+  .fold[open] .fold-name::after { transform: rotate(-135deg) translateY(-1px); }
+  .fold[open] .fold-recap { display: none; }
+  .fold[open] > .fold-sum { margin-bottom: 14px; }
+  .fold-recap { font-size: 12px; color: var(--muted-2); }
+  .side-h { display: none; }
+}
+/* 320px-class phones: the bar's three groups must fit without horizontal scroll */
+@media (max-width: 374px) {
+  .pbar { gap: 4px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  .pbar .btn.square { width: 40px; min-width: 40px; }
+  .pb-play { min-width: 0; padding: 0 10px; gap: 5px; }
+  .pb-next { min-width: 0; padding: 0 10px; }
+  .pb-read { min-width: 48px; }
 }

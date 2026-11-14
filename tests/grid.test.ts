@@ -140,20 +140,20 @@ describe('generator output on the new grid', () => {
     for (const s of lick.cellStarts!) expect(s % TPB).toBe(0);
   });
   it('snapshot of the current generator (seed 3, tier 3, key C, tenor range, legacy pool)', () => {
-    expect(lick.fragmentIds).toEqual(['m7-orig-16', 'dom7-proto-52', 'maj7-orig-21']);
-    expect(lick.cellStarts).toEqual([0, 48, 96]);
-    expect(lick.difficulty.score).toBe(27.4);
-    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[null, 0, 6], [65, 6, 6], [69, 12, 6], [72, 18, 6]]);
-    expect(lick.notes.length).toBe(23);
+    expect(lick.fragmentIds).toEqual(['m7-orig-15', 'dom7-proto-48', 'maj7-seed-3', 'maj7-proto-53h2']);
+    expect(lick.cellStarts).toEqual([0, 48, 96, 120]);
+    expect(lick.difficulty.score).toBe(34.9);
+    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[72, 0, 6], [71, 6, 6], [69, 12, 6], [68, 18, 6]]);
+    expect(lick.notes.length).toBe(21);
   });
   it('exports stable MIDI (sha1 snapshot of the current generator and exporter)', () => {
     const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, range, seed: 3, fragments: LEGACY_POOL });
-    expect(l.difficulty.score).toBe(41);
+    expect(l.difficulty.score).toBe(53.9);
     const sha = (swing: boolean, comping: boolean) =>
       createHash('sha1').update(lickToMidi(l, { bpm: 120, swing, comping, comp: 'rootless' })).digest('hex');
-    expect(sha(false, false)).toBe('821fb8e3ce6eb7c5ed756b12819ce92b8f11dd52');
-    expect(sha(false, true)).toBe('0f710a9cf7443568eaef7a9b21cc1a15846137c8');
-    expect(sha(true, false)).toBe('b078c2873d40efe7d8c1bd7108c683432b1a0fa9');
-    expect(sha(true, true)).toBe('edddeb222e75d31e3db8198b14d18b028d2f371b');
+    expect(sha(false, false)).toBe('686f3e2d79228dce8265f7832833c6d9c91876d8');
+    expect(sha(false, true)).toBe('c41290c8d488b1a43e3f4ebcde739eed57866b90');
+    expect(sha(true, false)).toBe('e603f5b90893496b35b6f1de9e22e86ec360351e');
+    expect(sha(true, true)).toBe('373031c9f7cd477dab0db2520f1491b77ebe95e1');
   });
 });

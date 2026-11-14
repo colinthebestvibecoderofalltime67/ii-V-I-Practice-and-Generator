@@ -3,6 +3,7 @@ import { TICKS_PER_16TH } from '../types';
 import { LENGTHS, PROGRESSIONS } from '../theory/progressions';
 import { INSTRUMENTS } from '../instruments';
 import type { CompStyle } from '../audio/comping';
+import { DRILL_ORDERS, clampInt, type DrillOrder } from '../practice/drill';
 
 /** Persisted user settings. Everything here is a per-browser convenience. */
 export interface Settings {
@@ -33,6 +34,19 @@ export interface Settings {
   showFingers: boolean;
   /** Show scale-degree labels and the scale of each chord. */
   analyze: boolean;
+  /** 12-key drill: order of keys ('off' = normal play), passes per key 1..4, tempo ladder step 0..20 BPM and its cap. */
+  drillOrder: DrillOrder;
+  drillRepeats: number;
+  drillTempoStep: number;
+  drillMaxBpm: number;
+  /** Call and response: alternate a played lick (call) with a muted pass (response). */
+  callResponse: boolean;
+  /** Response passes after each call, 1 or 2. */
+  responsePasses: 1 | 2;
+  /** Keep the notes visible during the response pass (default: hidden). */
+  showNotesInResponse: boolean;
+  /** When Hide notes is on, keep the chord symbols readable. */
+  hideKeepChords: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -58,6 +72,14 @@ export const DEFAULT_SETTINGS: Settings = {
   tabPosition: 'auto',
   showFingers: false,
   analyze: false,
+  drillOrder: 'off',
+  drillRepeats: 1,
+  drillTempoStep: 0,
+  drillMaxBpm: 200,
+  callResponse: false,
+  responsePasses: 1,
+  showNotesInResponse: false,
+  hideKeepChords: true,
 };
 
 /** Old `tier` setting -> middle of that tier's slider band. */
@@ -142,6 +164,14 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (isNum(raw.pianoVolume)) s.pianoVolume = clamp(raw.pianoVolume, 0, 1);
   if (raw.comp === 'rootless' || raw.comp === 'block' || raw.comp === 'sparse') s.comp = raw.comp;
   if (typeof raw.tabPosition === 'string' && (raw.tabPosition === 'auto' || TAB_POSITION_RE.test(raw.tabPosition))) s.tabPosition = raw.tabPosition;
+  if (typeof raw.drillOrder === 'string' && (DRILL_ORDERS as readonly string[]).includes(raw.drillOrder)) s.drillOrder = raw.drillOrder as DrillOrder;
+  if (isNum(raw.drillRepeats)) s.drillRepeats = clampInt(raw.drillRepeats, 1, 4);
+  if (isNum(raw.drillTempoStep)) s.drillTempoStep = clampInt(raw.drillTempoStep, 0, 20);
+  if (isNum(raw.drillMaxBpm)) s.drillMaxBpm = clampInt(raw.drillMaxBpm, 40, 320);
+  if (raw.responsePasses === 1 || raw.responsePasses === 2) s.responsePasses = raw.responsePasses;
+  for (const k of ['callResponse', 'showNotesInResponse', 'hideKeepChords'] as const) {
+    if (isBool(raw[k])) s[k] = raw[k];
+  }
   for (const k of ['slow', 'piano', 'loop', 'swing', 'straight16', 'hide', 'showTab', 'showFingers', 'countIn', 'metronome', 'midiBacking', 'analyze'] as const) {
     if (isBool(raw[k])) s[k] = raw[k];
   }

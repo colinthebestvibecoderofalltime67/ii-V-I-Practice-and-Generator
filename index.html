@@ -51,6 +51,7 @@
           <div class="menu-pop" id="export-menu" role="menu" hidden>
             <button type="button" role="menuitem" id="btn-midi">Download MIDI</button>
             <button type="button" role="menuitem" id="btn-pdf">Download PDF</button>
+            <button type="button" role="menuitem" id="btn-share">Copy share link</button>
           </div>
         </div>
       </div>
@@ -81,8 +82,10 @@
         <label class="check"><input type="checkbox" id="c-swing"> Swing</label>
         <label class="check" id="straight16-wrap"><input type="checkbox" id="c-straight16"> Straight 16ths</label>
         <label class="check"><input type="checkbox" id="c-piano"> Backing</label>
-        <label class="check"><input type="checkbox" id="c-loop"> Loop</label>
+        <label class="check" id="loop-wrap"><input type="checkbox" id="c-loop"> Loop</label>
+        <span id="loop-hint" hidden>Loop stays on while a 12-key drill or call and response is set.</span>
         <label class="check"><input type="checkbox" id="c-hide"> Hide notes</label>
+        <label class="check"><input type="checkbox" id="c-cr"> Call and response</label>
         <label class="check" id="tab-wrap" hidden><input type="checkbox" id="c-tab"> Show tab</label>
         <label class="check" id="fingers-wrap" hidden><input type="checkbox" id="c-fingers"> Finger numbers</label>
         <button type="button" id="btn-sound" class="tbtn quiet" aria-haspopup="dialog">Sound settings</button>
@@ -121,6 +124,10 @@
 
   <aside class="side" aria-labelledby="side-h">
     <h2 id="side-h" class="side-h">Next lick</h2>
+    <!-- phone-bar:settings-start (on phones this folds; on desktop the summary is hidden and it stays open) -->
+    <details class="fold" id="lick-settings" open>
+    <summary class="fold-sum"><span class="fold-name">Lick settings</span><span class="fold-recap mono" id="fold-recap"></span></summary>
+    <div class="fold-body">
     <fieldset class="group">
       <legend class="label">Progression</legend>
       <div id="prog-list" class="radio-list"></div>
@@ -153,9 +160,27 @@
         <div id="len-list" class="radio-row"></div>
       </fieldset>
     </div>
+    </div>
+    </details>
+    <!-- phone-bar:settings-end -->
     <button type="button" id="btn-gen" class="btn ink gen">Generate lick <kbd class="mono">G</kbd></button>
   </aside>
 </div>
+
+<!-- phone-bar:start (visible only at <= 760px) -->
+<nav class="pbar" id="pbar" aria-label="Practice controls">
+  <button type="button" id="pb-play" class="btn primary pb-play">
+    <svg id="pb-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>
+    <span id="pb-play-label">Play</span>
+  </button>
+  <button type="button" id="pb-next" class="btn pb-next" aria-label="Next lick (generate)">Next</button>
+  <div class="pb-key">
+    <button type="button" id="pb-dn" class="btn square mono" aria-label="Key down a semitone">−</button>
+    <p class="pb-read mono" id="pb-read"><span id="pb-key"></span><span id="pb-bar" class="muted"></span></p>
+    <button type="button" id="pb-up" class="btn square mono" aria-label="Key up a semitone">+</button>
+  </div>
+</nav>
+<!-- phone-bar:end -->
 
 <footer class="foot">
   <p class="wrap">Every lick is generated from original melodic cells; difficulty is computed from the notes. Notation by VexFlow, sound synthesized in your browser.</p>
@@ -180,6 +205,43 @@
       <label class="check"><input type="checkbox" id="c-met"> Metronome</label>
       <label class="check"><input type="checkbox" id="c-midi"> Include backing in MIDI export</label>
     </div>
+    <!-- 12-key drill (C1) -->
+    <fieldset class="field drill" id="drill">
+      <legend class="label">12-key drill</legend>
+      <label class="drill-row"><span>Order</span>
+        <select id="sel-drill">
+          <option value="off">Off</option>
+          <option value="fourths">Cycle of 4ths</option>
+          <option value="fifths">Cycle of 5ths</option>
+          <option value="chromatic-up">Chromatic up</option>
+          <option value="chromatic-down">Chromatic down</option>
+          <option value="whole-steps">Whole steps</option>
+          <option value="random">Random</option>
+        </select>
+      </label>
+      <label class="drill-row"><span>Change key every</span>
+        <select id="sel-drill-rep" aria-label="Passes per key"><option>1</option><option>2</option><option>3</option><option>4</option></select>
+        <span>passes</span>
+      </label>
+      <div class="drill-row"><label for="n-drill-step">Tempo ladder: +</label>
+        <input type="number" id="n-drill-step" min="0" max="20" step="1" inputmode="numeric">
+        <label for="n-drill-max">BPM each key, up to</label>
+        <input type="number" id="n-drill-max" min="40" max="320" step="5" inputmode="numeric">
+        <span>BPM</span>
+      </div>
+      <p class="small muted" id="drill-hint">Plays the current lick once through all 12 keys, then stops on the last key. Turns Loop on.</p>
+    </fieldset>
+    <!-- call and response (C3) -->
+    <fieldset class="field drill" id="cr-set">
+      <legend class="label">Call and response</legend>
+      <div class="drill-row" role="radiogroup" aria-labelledby="cr-resp-label"><span id="cr-resp-label">Response passes per call</span>
+        <label class="check"><input type="radio" name="cr-resp" value="1"> 1</label>
+        <label class="check"><input type="radio" name="cr-resp" value="2"> 2</label>
+      </div>
+      <label class="check"><input type="checkbox" id="c-cr-show"> Show notes during your turn</label>
+      <label class="check"><input type="checkbox" id="c-hide-keep"> Keep chord symbols visible when hiding notes</label>
+      <p class="small muted">The lead plays the lick (call), then is silent while the backing continues (response) and the notes are hidden. Turns Loop on.</p>
+    </fieldset>
   </div>
 </dialog>
 

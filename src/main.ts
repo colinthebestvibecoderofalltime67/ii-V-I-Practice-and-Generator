@@ -9,10 +9,13 @@ import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from 
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
 import { renderLick, type NoteLabel } from './render/notation';
 import { lickFingerings } from './render/tab';
-import { Player, type PlayOptions } from './audio/player';
+import { Player, type PassAction, type PlayOptions } from './audio/player';
+import { sessionStep, type SessionConfig } from './practice/session';
+import { clampInt, drillKeys, drillStep, type DrillConfig, type DrillOrder } from './practice/drill';
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
 import { Library } from './ui/library';
+import { parseShareHash, shareUrl } from './share';
 import { downloadBlob, fileName, isTransposing, keyLabel, progressionName, titleKeyLabel } from './ui/format';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -133,7 +136,13 @@ function syncControls(): void {
   $<HTMLInputElement>('c-straight16').disabled = !settings.swing;
   $('straight16-wrap').setAttribute('aria-disabled', String(!settings.swing));
   check('c-piano', settings.piano);
-  check('c-loop', settings.loop);
+  // While a drill or call and response is set, Loop is forced on: show that, and say why it cannot be changed.
+  const loopForced = drillOn() || settings.callResponse;
+  check('c-loop', settings.loop || loopForced);
+  $<HTMLInputElement>('c-loop').disabled = loopForced;
+  $('loop-wrap').setAttribute('aria-disabled', String(loopForced));
+  $('loop-wrap').title = loopForced ? $('loop-hint').textContent ?? '' : '';
+  if (loopForced) $('c-loop').setAttribute('aria-describedby', 'loop-hint'); else $('c-loop').removeAttribute('aria-describedby');
   check('c-hide', settings.hide);
   $('tab-wrap').hidden = !i.tab;
   check('c-tab', settings.showTab);
@@ -148,12 +157,19 @@ function syncControls(): void {
   $('bpm-val').textContent = String(effectiveBpm());
   $('bpm-val').title = settings.slow ? `Slow practice: 60% of ${settings.bpm} (minimum 40)` : '';
   $<HTMLSelectElement>('sel-comp').value = settings.comp;
+  $<HTMLSelectElement>('sel-drill').value = settings.drillOrder;
+  $<HTMLSelectElement>('sel-drill-rep').value = String(settings.drillRepeats);
+  $<HTMLInputElement>('n-drill-step').value = String(settings.drillTempoStep);
+  $<HTMLInputElement>('n-drill-max').value = String(settings.drillMaxBpm);
+  for (const id of ['sel-drill-rep', 'n-drill-step', 'n-drill-max']) $<HTMLInputElement>(id).disabled = !drillOn();
   $<HTMLInputElement>('r-lead').value = String(settings.leadVolume);
   $<HTMLInputElement>('r-piano').value = String(settings.pianoVolume);
 
-  $('paper').classList.toggle('covered', settings.hide);
-  $('score').classList.toggle('hidden', settings.hide);
-  $('cover').setAttribute('aria-hidden', String(!settings.hide));
+  check('c-cr', settings.callResponse);
+  check('c-cr-show', settings.showNotesInResponse);
+  check('c-hide-keep', settings.hideKeepChords);
+  setRadio('cr-resp', String(settings.responsePasses));
+  syncCover();
   updateTransport();
   updateFav();
 }
@@ -266,7 +282,30 @@ function renderNotation(): void {
     romans: romansFor(lick.progressionId),
     activeBar: activeBar(),
     noteLabels: noteLabels(),
+    hideNotes: notesCovered() && settings.hideKeepChords,
   });
+}
+
+/* ---------------------------------------------------------------- hiding the notes (Hide notes + response passes) */
+
+/** True during a response pass whose notes are hidden (set by the session; see drillOnPassStart). */
+let responseHide = false;
+const notesCovered = (): boolean => settings.hide || responseHide;
+
+/** Cover the sheet (text overlay) or, with chord symbols kept, redraw it without notes. */
+function syncCover(): void {
+  const wholeCover = notesCovered() && !settings.hideKeepChords;
+  $('paper').classList.toggle('covered', wholeCover);
+  $('score').classList.toggle('hidden', wholeCover);
+  $('cover').setAttribute('aria-hidden', String(!wholeCover));
+  $('cover').textContent = responseHide ? 'Your turn. Play it back.' : 'Now play it from memory.';
+}
+
+function setResponseHide(on: boolean): void {
+  if (responseHide === on) return;
+  responseHide = on;
+  syncCover();
+  renderNotation();
 }
 
 /** Degree labels for the sheet when Analyze is on. */
@@ -277,6 +316,7 @@ function noteLabels(): (NoteLabel | null)[] | undefined {
 
 function setStatus(s: string): void {
   $('status').textContent = s;
+  updateBar();
 }
 
 function renderMeta(): void {
@@ -296,6 +336,7 @@ function renderMeta(): void {
     meta.append(s);
   }
 
+  updateBar();
   $('tier-name').textContent = TIER_NAMES[d.tier];
   const score = displayScore(d.score);
   $('tier-score').textContent = `${score} / 100`;
@@ -341,6 +382,7 @@ function updateTransport(): void {
   $('play-icon').innerHTML = playing ? PAUSE_PATH : PLAY_PATH;
   const dis = !lick;
   for (const id of ['btn-play', 'btn-stop', 'btn-export', 't-fav']) $<HTMLButtonElement>(id).disabled = dis;
+  updateBar();
 }
 
 function updateFav(): void {
@@ -354,6 +396,7 @@ function updateFav(): void {
 
 function stopPlayback(): void {
   if (player.state !== 'stopped') player.stop();
+  finishDrill();
   highlight = [];
   setStatus('Ready');
   updateTransport();
@@ -390,7 +433,6 @@ function generate(): void {
     avoid: history.slice(0, RECENT_LICKS).flatMap(e => e.lick.fragmentIds),
     seed: randomSeed(),
   });
-  if (settings.hide) { settings.hide = false; persist(); syncControls(); }
   showLick(l, true);
 }
 
@@ -406,7 +448,7 @@ function refit(keyPc: number): void {
 function restartIfPlaying(): void {
   if (player.state === 'stopped') return;
   if (player.state === 'paused') { stopPlayback(); renderNotation(); return; }
-  startPlayback();
+  startPlayback(true); // a setting changed mid-play: the drill (if any) keeps its position
 }
 
 /* ---------------------------------------------------------------- playback */
@@ -415,35 +457,164 @@ const PROGRAMS: Record<Instrument['timbre'], number> = { reed: 66, brass: 56, fl
 
 function playOptions(): PlayOptions {
   return {
-    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, loop: settings.loop, metronome: settings.metronome,
+    bpm: effectiveBpm(), swing: settings.swing, straight16: settings.straight16, loop: settings.loop || drillOn() || settings.callResponse, metronome: settings.metronome,
     countIn: settings.countIn, piano: settings.piano, comp: settings.comp,
     leadVolume: settings.leadVolume, pianoVolume: settings.pianoVolume, timbre: inst().timbre,
   };
 }
 
-function startPlayback(): void {
+/**
+ * Start playing. `keepDrill` is for restarts caused by a setting change while playing: the running drill carries its
+ * position (key, repeat, tempo-ladder step) into the new play. Without it (Play from stopped) a new drill begins.
+ */
+function startPlayback(keepDrill = false): void {
   if (!lick) return;
+  const prev = keepDrill ? drill : null;
+  if (!keepDrill) finishDrill();
   highlight = [];
   const bars = Math.max(1, Math.ceil(lick.totalTicks / TPBAR));
-  player.play(lick, playOptions(), {
+  const run = startDrill(prev);
+  if (prev && !run) { drill = prev; finishDrill(); } // both drill and call-and-response were turned off
+  if (prev) setResponseHide(false);
+  const opts = playOptions();
+  if (run) opts.bpm = sessionStep(run.session, run.offset).bpm ?? opts.bpm;
+  player.play(lick, opts, {
     onNote: (idx, cur) => {
       highlight = idx;
       currentNote = cur ?? -1;
       const b = activeBar();
-      if (b !== undefined) setStatus(`bar ${b + 1} / ${bars}`);
-      if (!settings.hide) renderNotation();
+      if (b !== undefined && !drill) setStatus(`bar ${b + 1} / ${bars}`);
+      if (!(notesCovered() && !settings.hideKeepChords)) renderNotation();
     },
     onStatus: s => { if (/count/i.test(s)) setStatus(s.toLowerCase()); },
-    onEnd: () => { highlight = []; setStatus('Ready'); updateTransport(); renderNotation(); },
+    onPass: run ? drillOnPass : undefined,
+    onPassStart: run ? drillOnPassStart : undefined,
+    onEnd: () => { finishDrill(); highlight = []; setStatus(run?.session.drill ? 'Drill complete' : 'Ready'); updateTransport(); renderNotation(); },
   });
   updateTransport();
 }
 
+/* ---------------------------------------------------------------- 12-key drill */
+
+interface DrillRun {
+  /** The combined 12-key drill + call-and-response configuration (see practice/session.ts). */
+  session: SessionConfig;
+  /** The lick every key is transposed from (never from an already-transposed copy). */
+  base: Lick;
+  /** History id of the lick on screen when the drill began; replaced by the lick shown at the end. */
+  originalId: string;
+  /** The order `session.keys` was built for. */
+  order: DrillOrder;
+  /** Session pass number that this play's pass 0 corresponds to (non-zero after a restart that kept the position). */
+  offset: number;
+  /** The call+response group last started (0-based), and the effective BPM the ladder was built from. */
+  lastGroup: number;
+  userBpm: number;
+}
+let drill: DrillRun | null = null;
+
+const drillOn = (): boolean => settings.drillOrder !== 'off';
+
+/**
+ * Turn the settings into a run, or null when neither the drill nor call and response is on. Loop is forced on (see
+ * syncControls), not written to the setting. `prev` is the run being replaced by a settings-change restart: the key
+ * list, the group reached and the tempo-ladder step carry over, so the drill does not go back to key 1.
+ * Changing the Order instead starts the new order from the key on screen, at the tempo the ladder had reached.
+ */
+function startDrill(prev: DrillRun | null = null): DrillRun | null {
+  if (!lick || !(drillOn() || settings.callResponse)) return null;
+  const base = prev?.base ?? (sourceLick && sourceLick.id === lick.id ? sourceLick : lick);
+  const cfg: DrillConfig = { order: settings.drillOrder, repeats: settings.drillRepeats, tempoStep: settings.drillTempoStep, maxBpm: settings.drillMaxBpm, tempoEvery: 'key' };
+  const eff = effectiveBpm();
+  const groupSize = settings.callResponse ? 1 + settings.responsePasses : 1;
+  let keys: readonly number[] = [lick.keyPc];
+  let startBpm = eff;
+  let group = 0;
+  if (drillOn()) {
+    const pc = prev?.session.drill ? prev.session.drill : null;
+    if (prev && pc && prev.order === settings.drillOrder) {
+      keys = prev.session.keys;
+      startBpm = prev.session.startBpm + (eff - prev.userBpm); // a tempo change moves the whole ladder
+      group = prev.lastGroup;
+    } else {
+      keys = drillKeys(lick.keyPc, settings.drillOrder, randomSeed());
+      if (prev && pc) startBpm = drillStep(pc, prev.session.keys, prev.session.startBpm, prev.lastGroup).bpm + (eff - prev.userBpm);
+    }
+  }
+  drill = {
+    session: { callResponse: settings.callResponse, responses: settings.responsePasses, drill: drillOn() ? cfg : null, keys, startBpm },
+    base,
+    originalId: prev?.originalId ?? lick.id,
+    order: settings.drillOrder,
+    offset: group * groupSize,
+    lastGroup: group,
+    userBpm: eff,
+  };
+  return drill;
+}
+
+/** Called by the player ahead of each bar line: decide what the next pass plays. */
+function drillOnPass(passIndex: number): PassAction | void {
+  const d = drill;
+  if (!d) return;
+  const st = sessionStep(d.session, passIndex + d.offset);
+  if (st.done) return { stop: true };
+  const action: PassAction = { silentLead: st.silentLead };
+  if (st.bpm != null) action.bpm = st.bpm;
+  if (st.newKey != null) action.lick = transposeLick(d.base, st.newKey, concertRange(inst()), comfortFor(d.base));
+  return action;
+}
+
+/** Called by the player at the bar line itself: show what is now playing. */
+function drillOnPassStart(passIndex: number, info: { lick: Lick; bpm: number }): void {
+  const d = drill;
+  if (!d) return;
+  const st = sessionStep(d.session, passIndex + d.offset);
+  d.lastGroup = st.groupIndex;
+  if (info.lick !== lick) {
+    // The key SETTING is left alone while drilling (a Random setting stays Random, and a reload mid-drill still
+    // matches the History lick); finishDrill commits it. Nothing goes to History until the drill stops.
+    showLick(info.lick, false, undefined, true);
+  }
+  setResponseHide(st.role === 'response' && !settings.showNotesInResponse);
+  const parts: string[] = [];
+  if (st.drill) {
+    const reps = clampInt(d.session.drill!.repeats, 1, 4);
+    parts.push(`Key ${st.drill.keyIndex + 1}/${st.drill.keyCount}`, titleKeyLabel(info.lick, inst()), `${info.bpm} BPM`);
+    if (reps > 1) parts.push(`pass ${st.drill.repeat + 1}/${reps}`);
+  }
+  if (d.session.callResponse) parts.push(st.role === 'response' ? 'Your turn' : 'Listen');
+  else if (!st.drill) parts.push(`${info.bpm} BPM`);
+  setStatus(parts.join(' · '));
+}
+
+/**
+ * End the drill: the lick on screen (the last key reached) replaces the starting lick in History. The key select then
+ * follows the lick on screen, unless the setting is Random (which stays Random), so a reload shows the same lick/key.
+ */
+function finishDrill(): void {
+  const d = drill;
+  drill = null;
+  setResponseHide(false);
+  if (!d || !lick || lick.id === d.originalId) return;
+  history = store.removeHistory(d.originalId);
+  history = store.addHistory(lick);
+  if (settings.key !== 'random' && settings.key !== lick.keyPc) {
+    settings.key = lick.keyPc;
+    persist();
+    $<HTMLSelectElement>('sel-key').value = String(settings.key);
+    updateRecap();
+  }
+}
+
+/** Status text from just before Pause, restored on Resume. */
+let pausedStatus = '';
+
 function togglePlay(): void {
   if (!lick) return;
   if (player.state === 'stopped') startPlayback();
-  else if (player.state === 'playing') { player.pause(); setStatus('Paused'); }
-  else { player.resume(); }
+  else if (player.state === 'playing') { pausedStatus = $('status').textContent ?? ''; player.pause(); setStatus('Paused'); }
+  else { player.resume(); setStatus(pausedStatus); } // the pass status (key, tempo, listen/your turn) is only set at pass starts
   updateTransport();
 }
 
@@ -485,6 +656,47 @@ async function doPdf(): Promise<void> {
   }
 }
 
+/* ---- share links (src/share.ts): `#l=<code>` carries the lick at concert pitch ---- */
+
+/** Copy text without the async clipboard API: select a readonly input and execCommand('copy'). */
+function copyFallback(text: string): boolean {
+  const prevFocus = document.activeElement as HTMLElement | null;
+  const input = document.createElement('input');
+  input.readOnly = true;
+  input.value = text;
+  input.setAttribute('aria-hidden', 'true');
+  input.tabIndex = -1;
+  input.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.append(input);
+  input.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  input.remove();
+  prevFocus?.focus?.(); // selecting the input moved focus; give it back (removing it would drop focus to <body>)
+  return ok;
+}
+
+async function doShare(): Promise<void> {
+  if (!lick) return;
+  let url: string;
+  try { url = shareUrl(lick, location.href); } catch { exportStatus("This lick can't be shared.", 6000); return; }
+  $('btn-share').dataset.url = url;
+  let ok = false;
+  try { await navigator.clipboard.writeText(url); ok = true; } catch { ok = copyFallback(url); }
+  exportStatus(ok ? 'Link copied.' : 'Could not copy the link.', ok ? 3000 : 6000);
+}
+
+/** Open a lick from `#l=...` if present, then clear the hash so a reload does not import it again. Returns true if shown. */
+function openSharedLick(): boolean {
+  const r = parseShareHash(location.hash);
+  if (r.kind === 'none') return false;
+  try { window.history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ }
+  if (r.kind === 'invalid') { exportStatus("That lick link isn't valid.", 6000); return false; }
+  showLick(transposeLick(r.lick, r.lick.keyPc, concertRange(inst()), comfortFor(r.lick)), true);
+  exportStatus('Opened a shared lick.', 4000);
+  return true;
+}
+
 /* ---------------------------------------------------------------- menus & dialogs */
 
 function setupExportMenu(): void {
@@ -515,6 +727,7 @@ function setupExportMenu(): void {
   });
   $('btn-midi').addEventListener('click', () => { close(true); doMidi(); });
   $('btn-pdf').addEventListener('click', () => { close(true); void doPdf(); });
+  $('btn-share').addEventListener('click', () => { close(true); void doShare(); });
 }
 
 function setupDialog(id: string, openerId: string): HTMLDialogElement {
@@ -587,7 +800,11 @@ function bind(): void {
   onCheck('c-loop', on => { setting('loop', on); restartIfPlaying(); });
   onCheck('c-swing', on => { setting('swing', on); restartIfPlaying(); });
   onCheck('c-straight16', on => { setting('straight16', on); restartIfPlaying(); });
-  onCheck('c-hide', on => { setting('hide', on); if (!on) renderNotation(); });
+  onCheck('c-hide', on => { setting('hide', on); renderNotation(); });
+  onCheck('c-hide-keep', on => { setting('hideKeepChords', on); renderNotation(); });
+  onCheck('c-cr', on => { setting('callResponse', on); restartIfPlaying(); });
+  onCheck('c-cr-show', on => { setting('showNotesInResponse', on); if (responseHide && on) setResponseHide(false); });
+  onRadio('cr-resp', v => { setting('responsePasses', v === '2' ? 2 : 1); restartIfPlaying(); });
   onCheck('c-tab', on => { setting('showTab', on); renderNotation(); });
   onCheck('c-fingers', on => { setting('showFingers', on); renderNotation(); });
   $<HTMLSelectElement>('sel-pos').addEventListener('change', e => {
@@ -615,6 +832,14 @@ function bind(): void {
   };
   $('r-lead').addEventListener('input', vol);
   $('r-piano').addEventListener('input', vol);
+  $<HTMLSelectElement>('sel-drill').addEventListener('change', e => { setting('drillOrder', (e.target as HTMLSelectElement).value as DrillOrder); restartIfPlaying(); });
+  $<HTMLSelectElement>('sel-drill-rep').addEventListener('change', e => { setting('drillRepeats', clampInt(Number((e.target as HTMLSelectElement).value), 1, 4)); });
+  const numSetting = (id: string, k: 'drillTempoStep' | 'drillMaxBpm', lo: number, hi: number): void => {
+    const el = $<HTMLInputElement>(id);
+    el.addEventListener('change', () => { setting(k, el.value === '' ? lo : clampInt(Number(el.value), lo, hi)); });
+  };
+  numSetting('n-drill-step', 'drillTempoStep', 0, 20);
+  numSetting('n-drill-max', 'drillMaxBpm', 40, 320);
   onCheck('c-count', on => setting('countIn', on));
   onCheck('c-met', on => { setting('metronome', on); restartIfPlaying(); });
   onCheck('c-midi', on => setting('midiBacking', on));
@@ -627,7 +852,7 @@ function bind(): void {
     if (tag === 'SELECT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
     if (tag === 'INPUT' && !['radio', 'checkbox', 'range'].includes((t as HTMLInputElement).type)) return;
     if (e.key === ' ' || e.code === 'Space') {
-      if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT') return;
+      if (t?.closest('button,a,summary,input,select,textarea,[contenteditable]')) return;
       e.preventDefault();
       togglePlay();
     } else if (e.key === 'g' || e.key === 'G') {
@@ -635,6 +860,13 @@ function bind(): void {
     } else if (e.key === 'a' || e.key === 'A') {
       setAnalyze(!settings.analyze);
     }
+  });
+
+  // A share link opened in a tab that already has the app only changes the hash.
+  window.addEventListener('hashchange', () => {
+    if (parseShareHash(location.hash).kind === 'none') return;
+    stopPlayback();
+    openSharedLick();
   });
 
   // re-render notation on width change (debounced)
@@ -649,13 +881,54 @@ function bind(): void {
   });
 }
 
+/* ---------------------------------------------------------------- phone practice bar */
+/* The bar only forwards to the existing buttons (clicking a display:none button still runs its handler). */
+
+const phoneMq = window.matchMedia('(max-width: 760px)');
+
+function updateBar(): void {
+  const play = $<HTMLButtonElement>('btn-play');
+  $('pb-play-label').textContent = $('play-label').textContent;
+  $('pb-play-icon').innerHTML = $('play-icon').innerHTML;
+  $<HTMLButtonElement>('pb-play').disabled = play.disabled;
+  // No aria-pressed: the visible label itself announces Play / Pause / Resume.
+  $('pb-key').textContent = lick ? titleKeyLabel(lick, inst()) : '–';
+  const st = $('status').textContent ?? '';
+  $('pb-bar').textContent = /Your turn$/.test(st) ? 'Your turn' : /Listen$/.test(st) ? 'Listen' : /^bar /.test(st) ? st.replace(' / ', '/') : /count/.test(st) ? st.replace(/.*: ?/, 'count ') : st === 'Paused' ? 'paused' : lick ? lengthShort(lick.length) : '';
+  updateRecap();
+}
+
+function updateRecap(): void {
+  const romans = romansFor(settings.progressionId).join('–');
+  // the written key, like the title and key menu (alto in concert C reads A)
+  const key = settings.key === 'random' ? 'Random key' : keyLabel((settings.key + inst().transpose) % 12, getProgression(settings.progressionId).mode);
+  $('fold-recap').textContent =
+    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], instShort(inst()), key, lengthShort(settings.length)].join(' · ');
+}
+
+function setupPhoneBar(): void {
+  const fold = $<HTMLDetailsElement>('lick-settings');
+  const fwd = (from: string, to: string): void => $(from).addEventListener('click', () => $(to).click());
+  fwd('pb-play', 'btn-play');
+  fwd('pb-next', 'btn-gen');
+  fwd('pb-dn', 'key-dn');
+  fwd('pb-up', 'key-up');
+  // Desktop always shows the settings; phones fold them once a first lick exists.
+  const sync = (): void => { if (!phoneMq.matches) fold.open = true; };
+  phoneMq.addEventListener('change', e => { if (e.matches) fold.open = false; else sync(); });
+  if (phoneMq.matches) fold.open = false;
+  fold.addEventListener('toggle', updateRecap);
+  updateBar();
+}
+
 /* ---------------------------------------------------------------- boot */
 
 buildStaticControls();
 fillKeyOptions();
 syncControls();
 bind();
-if (history.length) {
+setupPhoneBar();
+if (openSharedLick()) { /* shown */ } else if (history.length) {
   const h = history[0].lick;
   showLick(transposeLick(h, h.keyPc, concertRange(inst()), comfortFor(h)), false);
 } else {

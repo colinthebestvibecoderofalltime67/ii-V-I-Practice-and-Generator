@@ -229,3 +229,56 @@ describe('sweep', () => {
     for (const c of doubleCases) expect(c).toMatch(/^minor written key G#m: /);
   }, 120000);
 });
+
+describe('half-diminished 9th and chromatic upper neighbours', () => {
+  it('the natural 9th of a m7b5 chord keeps the 9th letter whatever the direction (C♯ over Bm7♭5)', () => {
+    const root = sp('B');
+    for (const direction of ['up', 'down', null] as const) {
+      expect(formatSpelling(spellNote(61, { root, quality: 'm7b5', direction })), String(direction)).toBe('C♯');
+    }
+    // the b9 stays C natural; over Fm7♭5 the b9 is G♭ and the 9 is G
+    expect(formatSpelling(spellNote(60, { root, quality: 'm7b5', direction: 'up' }))).toBe('C');
+    expect(formatSpelling(spellNote(67, { root: sp('F'), quality: 'm7b5', direction: 'down' }))).toBe('G');
+    expect(formatSpelling(spellNote(66, { root: sp('F'), quality: 'm7b5', direction: 'down' }))).toBe('G♭');
+  });
+  it('a note that falls a half step to a chord tone is written flat (C♭ over E♭m7, F♭ over A♭maj7)', () => {
+    expect(formatSpelling(spellNote(71, { root: sp('Eb'), quality: 'm7', direction: 'down', halfStepDownToChordTone: true }))).toBe('C♭');
+    expect(formatSpelling(spellNote(64, { root: sp('Ab'), quality: 'maj7', direction: 'down', halfStepDownToChordTone: true }))).toBe('F♭');
+    // without the resolution a white-key chromatic note keeps its natural letter
+    expect(formatSpelling(spellNote(71, { root: sp('Eb'), quality: 'm7', direction: 'down' }))).toBe('B');
+    // the octave is that of the written letter: C♭5 sounds as B4 (71)
+    expect(spellNote(71, { root: sp('Eb'), quality: 'm7', direction: 'down', halfStepDownToChordTone: true }).octave).toBe(5);
+  });
+  it('spellLick applies both rules from the melody', () => {
+    // E♭m7 (key D♭): B falling to B♭ (the 5th)
+    const l = mkLick('major-251', 1, [71, 70, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63]);
+    const s = spellLick(l, piano);
+    expect(formatSpelling(s[0]!)).toBe('C♭');
+    expect(formatSpelling(s[1]!)).toBe('B♭');
+    // minor ii-V-i in A: Bm7♭5 with a C♯ (the 9th) at the start and again later in the same bar
+    const m = mkLick('minor-251', 9, [73, 71, 69, 73, 63, 63, 63, 63, 63, 63, 63, 63]);
+    const t = spellLick(m, piano);
+    expect(formatSpelling(t[0]!)).toBe('C♯');
+    expect(formatSpelling(t[3]!)).toBe('C♯');
+  });
+});
+
+describe('upper-neighbour flats only in flat contexts (review fix)', () => {
+  const lickOf = (keyPc: number, mode: 'major' | 'minor', chords: { rootPc: number; quality: import('../src/types').ChordQualityId; symbol: string }[], midis: number[]): import('../src/types').Lick => ({
+    version: 2, id: 't', seed: 1, progressionId: mode === 'minor' ? 'minor-251' : 'major-251', length: 'standard', keyPc, mode, requestedTier: 3,
+    chords: chords.map((c, i) => ({ ...c, start: i * 48, dur: 48 })),
+    notes: midis.map((m, i) => ({ midi: m, start: i * 12, dur: 12, chord: Math.floor(i / 4) })),
+    totalTicks: chords.length * 48, fragmentIds: [], difficulty: { score: 10, tier: 2, features: [] }, createdAt: 0,
+  });
+  const piano = { id: 'piano', name: 'Piano', transpose: 0, clef: 'treble', range: [48, 84], timbre: 'keys', keyLabel: 'C' } as import('../src/types').Instrument;
+  const names = (l: import('../src/types').Lick) => spellLick(l, piano).map(s => (s ? formatSpelling(s) : '-'));
+  it('C7 in F keeps B→B♭; B7alt in E minor keeps E→D♯; Fm7 in C keeps E→E♭', () => {
+    expect(names(lickOf(5, 'major', [{ rootPc: 0, quality: 'dom7', symbol: 'C7' }], [72, 71, 70, 67]))[1]).toBe('B');
+    expect(names(lickOf(4, 'minor', [{ rootPc: 11, quality: 'dom7alt', symbol: 'B7alt' }], [71, 64, 63, 59]))[1]).toBe('E');
+    expect(names(lickOf(0, 'major', [{ rootPc: 5, quality: 'm7', symbol: 'Fm7' }], [65, 64, 63, 60]))[1]).toBe('E');
+  });
+  it('E♭m7 keeps C♭→B♭ and A♭maj7 keeps F♭→E♭', () => {
+    expect(names(lickOf(1, 'major', [{ rootPc: 3, quality: 'm7', symbol: 'E♭m7' }], [75, 71, 70, 66]))[1]).toBe('C♭');
+    expect(names(lickOf(8, 'major', [{ rootPc: 8, quality: 'maj7', symbol: 'A♭maj7' }], [68, 64, 63, 60]))[1]).toBe('F♭');
+  });
+});

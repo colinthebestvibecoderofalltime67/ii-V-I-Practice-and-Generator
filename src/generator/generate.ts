@@ -1,5 +1,5 @@
 import type { ChordQualityId, Fragment, LengthId, Lick, LickChord, LickNote, Tier } from '../types';
-import { RENDERABLE_DURS, TPB } from '../types';
+import { RENDERABLE_DURS, TICKS_PER_16TH, TPB, TPBAR } from '../types';
 import { FRAGMENTS } from '../fragments';
 import { CHORDS, inScale } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
@@ -37,8 +37,8 @@ export interface GenerateOptions {
   fragments?: Fragment[];
 }
 
-const CANDIDATES_PER_ROUND = 30;
-const MAX_ROUNDS = 3;
+const CANDIDATES_PER_ROUND = 50;
+const MAX_ROUNDS = 7;
 
 /* ------------------------------ fragment pools ------------------------------ */
 
@@ -127,11 +127,23 @@ interface PlanItem {
 
 const LEVEL_WEIGHT = [1, 0.3, 0.06, 0.02];
 
+/** What a dominant chord is doing in its progression: colours the cell choice (see cellWeight). */
+export type ChordRole = 'lyd' | 'primaryV' | 'alt' | 'other';
+export function chordRoles(progressionId: string, slots: readonly { roman: string; quality: ChordQualityId }[]): ChordRole[] {
+  return slots.map(sl =>
+    sl.roman === '♭II7' || sl.roman === '♭VII7' ? 'lyd'
+      : sl.quality === 'dom7alt' ? 'alt'
+        : progressionId === 'major-251' && sl.quality === 'dom7' ? 'primaryV' : 'other');
+}
+
 /**
  * At most this share of a lick's attacks may be 16th notes (Expert is reached by language, not by speed alone).
  * Cells are chosen against a running count, so a lick can still use a few fast cells but never a wall of 16ths.
  */
-const MAX_SIXTEENTH_SHARE = 0.3;
+const MAX_SIXTEENTH_SHARE: Record<Tier, number> = { 1: 0.3, 2: 0.3, 3: 0.27, 4: 0.2 };
+const SIXTEENTH_OVER_COST = 8;
+/** The finished lick's 16th-note share is softly capped lower than the cell-by-cell cap above (Expert: about a quarter). */
+const SIXTEENTH_SOFT_CAP: Record<Tier, number> = { 1: 0.3, 2: 0.3, 3: 0.27, 4: 0.2 };
 const sixteenthCache = new WeakMap<Fragment, { n16: number; n: number }>();
 /** Count of 16th-note attacks (triplets excluded) and of all attacks in a fragment. */
 function sixteenthCount(f: Fragment): { n16: number; n: number } {
@@ -154,7 +166,7 @@ function sixteenthCount(f: Fragment): { n16: number; n: number } {
  * damped at Advanced/Expert where many more fragments (and the triplet-scoring) compete. 16th-triplets are Expert only.
  * Fragments without triplets are untouched (factor 1), so pools without triplets draw exactly as before.
  */
-const TRIPLET_FACTOR: Record<Tier, number> = { 1: 0, 2: 1, 3: 0.22, 4: 0.12 };
+const TRIPLET_FACTOR: Record<Tier, number> = { 1: 0, 2: 1.3, 3: 0.22, 4: 0.05 };
 const tripletKinds = new WeakMap<Fragment, Set<TupletKind>>();
 function fragTripletKinds(f: Fragment): Set<TupletKind> {
   let k = tripletKinds.get(f);
@@ -194,14 +206,14 @@ export function levelForTarget(score: number): number {
 }
 
 /** Split a slot's beats into 2/4-beat pieces. 4-beat pieces only start on a bar line. */
-function partitionSlot(rng: Rng, slotBeats: number, startBeat: number, endingPiece: 2 | 4 | null): number[] {
+function partitionSlot(rng: Rng, slotBeats: number, startBeat: number, endingPiece: 2 | 4 | null, pFour = 0.6): number[] {
   const tail = endingPiece ?? 0;
   let remaining = slotBeats - tail;
   let beat = startBeat;
   const out: number[] = [];
   while (remaining > 0) {
     const canFour = remaining >= 4 && beat % 4 === 0;
-    const p = remaining === 2 || !canFour ? 2 : rng.chance(0.6) ? 4 : 2;
+    const p = remaining === 2 || !canFour ? 2 : rng.chance(pFour) ? 4 : 2;
     out.push(p);
     remaining -= p;
     beat += p;
@@ -210,32 +222,100 @@ function partitionSlot(rng: Rng, slotBeats: number, startBeat: number, endingPie
   return out;
 }
 
-/** Pitch content (rel pitches) and melodic shape (intervals) of a fragment, to spot loops across different ids. */
-const fragSigs = new WeakMap<Fragment, { rels: string; shape: string }>();
-function fragSig(f: Fragment): { rels: string; shape: string } {
-  let s = fragSigs.get(f);
+/** Pitch content (rel pitches), melodic shape and colour of a fragment, to spot loops, noodling and wrong colours. */
+interface CellInfo {
+  rels: string;
+  shape: string;
+  /** First three / last two pitches (rel, mod 12): cells sharing them sound like the same figure. */
+  first3: string;
+  last2: string;
+  pcs: Set<number>;
+  attacks: number;
+  /** Altered tensions (b9, #9, b13) present, and one of them held a quarter or longer on a beat. */
+  alt: number;
+  altHeld: boolean;
+  nat11: boolean;
+  sharp11: boolean;
+  /** Last pitched note, rel mod 12. */
+  lastRel: number;
+  firstRel: number;
+  /** Has a dotted 8th + 16th pair (march-like under swing): at most one such cell per lick. */
+  dotted: boolean;
+  /** Does the first pitched note land on a guide tone of q? */
+  firstGuide(q: ChordQualityId): boolean;
+}
+const cellInfos = new WeakMap<Fragment, CellInfo>();
+function cellInfo(f: Fragment): CellInfo {
+  let s = cellInfos.get(f);
   if (!s) {
-    const rels = f.notes.filter(n => n.rel != null).map(n => n.rel as number);
-    s = { rels: rels.map(r => mod12(r)).join(','), shape: rels.slice(1).map((r, i) => r - rels[i]).join(',') };
-    fragSigs.set(f, s);
+    const rels: number[] = [];
+    let alt = 0;
+    let altHeld = false;
+    let t = 0;
+    f.notes.forEach((n, i) => {
+      if (n.rel != null && !(i > 0 && f.notes[i - 1].tie && f.notes[i - 1].rel === n.rel)) {
+        rels.push(n.rel);
+        const r = mod12(n.rel);
+        if (r === 1 || r === 3 || r === 8) {
+          alt++;
+          if (t % TPB === 0 && n.dur >= TPB) altHeld = true;
+        }
+      }
+      t += n.dur;
+    });
+    const m = rels.map(r => mod12(r));
+    s = {
+      rels: m.join(','), shape: rels.slice(1).map((r, i) => r - rels[i]).join(','),
+      first3: m.slice(0, 3).join(','), last2: m.slice(-2).join(','),
+      pcs: new Set(m), attacks: m.length, alt, altHeld, nat11: m.includes(5), sharp11: m.includes(6), lastRel: m[m.length - 1], firstRel: m[0],
+      dotted: f.notes.some((n, i) => n.dur === 9 && f.notes[i + 1]?.dur === 3),
+      firstGuide: (q: ChordQualityId) => CHORDS[q].guide.some(g => mod12(g) === m[0]),
+    };
+    cellInfos.set(f, s);
   }
   return s;
+}
+
+/**
+ * Cell weight factors that depend on the chord the cell lands on (its role in the progression) and on the level:
+ *  - tritone-sub / backdoor dominants (Lydian dominant): Lydian (#11, no natural 11) cells x12; no b9/#9/b13 (that is the altered
+ *    sound, not Lydian dominant) and no natural 11 anywhere;
+ *  - the V7 of a major ii-V-I stays Mixolydian-first: Lydian cells x0.3;
+ *  - low-level 7alt: cells with fewer than two altered tones that never hold one on a beat are thin (they sound Mixolydian) x0.15;
+ *  - m7b5 cells of Level 2+ should state the b5; near-endless oscillation between two or three pitches is noodling.
+ */
+function roleWeight(f: Fragment, q: ChordQualityId, role: ChordRole, level: number): number {
+  const c = cellInfo(f);
+  let w = 1;
+  if (q === 'dom7' && role === 'lyd') {
+    const lydCell = c.sharp11 && !c.nat11 && c.alt === 0;
+    if (lydCell) { const d = Math.abs(f.level - level); w *= d <= (level >= 3.5 ? 0.5 : level >= 2.5 ? 2 : 0.5) ? (level >= 2.5 ? 12 : 4) : d <= 1 ? 2 : 1; }
+    if (c.alt > 0) w *= 0.05;
+    if (c.nat11) w *= 0.08;
+  } else if (q === 'dom7' && role === 'primaryV' && c.sharp11 && !c.nat11 && c.alt === 0) w *= 0.3;
+  if (q === 'dom7alt' && c.alt < 2 && !c.altHeld) w *= level < 1.5 ? 0.8 : level < 2.5 ? 0.25 : 0.6;
+  if (q === 'm7b5' && f.level >= 2 && !c.pcs.has(6)) w *= 0.2;
+  if (c.attacks >= 7 && c.pcs.size <= 3) w *= 0.05;
+  return w;
 }
 
 function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
   const first = f.notes[0];
   if (first.rel == null) return true;
   const c = CHORDS[q];
-  return [...c.tones, ...c.tensions].some(t => mod12(t) === mod12(first.rel as number));
+  const r = mod12(first.rel);
+  return c.tones.some(t => mod12(t) === r) || c.tensions.some(t => mod12(t) === r);
 }
 
 function buildPlan(
   rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number, tier: Tier,
-  avoid?: ReadonlySet<string>,
+  avoid: ReadonlySet<string> | undefined, roles: ChordRole[], baseCache: Map<string, Map<Fragment, number>>,
 ): PlanItem[] {
   const plan: PlanItem[] = [];
+  let prevInfo: CellInfo | null = null;
   let beat = 0;
   let seqCells = 0;
+  let dottedCells = 0;
   let n16 = 0;
   let nAll = 0;
   chords.forEach((chord, ci) => {
@@ -246,30 +326,48 @@ function buildPlan(
       const opts = ([4, 2] as const).filter(b => b <= slotBeats[ci]);
       endingPiece = rng.weighted(opts, b => (b === 4 ? 3 : 1));
     }
-    const parts = partitionSlot(rng, slotBeats[ci], beat, endingPiece);
+    const parts = partitionSlot(rng, slotBeats[ci], beat, endingPiece, roles[ci] === 'lyd' ? 0.25 : 0.6); // 2-beat cells: the Lydian-dominant cells are mostly short
     let tick = chord.start;
     let prevId = '';
-    let prevSig: { rels: string; shape: string } | null = null;
     parts.forEach((b, pi) => {
       const ending = isLastSlot && pi === parts.length - 1;
       const pool = pools.get(q, b as 2 | 4, ending);
+      // Weight factors that depend only on the cell, the chord and the round (level, sharpness) are cached per round.
+      const ctx = `${q}|${roles[ci]}|${pi === 0 ? 1 : 0}|${ending ? 1 : 0}`;
+      let base = baseCache.get(ctx);
+      if (!base) { base = new Map(); baseCache.set(ctx, base); }
       const frag = rng.weighted(pool, f => {
-        let w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
-        w *= tripletFactor(f, level, tier);
+        let w = base!.get(f);
+        if (w === undefined) {
+          w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
+          w *= tripletFactor(f, level, tier);
+          const ci0 = cellInfo(f);
+          w *= roleWeight(f, q, roles[ci], level);
+          if (ending) {
+            // the closing note: root/3rd/5th beat the 9th and the 6th (a 6th in the minor tonic is a Beginner/Intermediate trap)
+            if (ci0.lastRel === 2 && tier >= 3) w *= tier === 4 ? 0.3 : 0.4;
+            if (ci0.lastRel === 9) w *= q === 'maj7' ? (tier === 4 ? 0.25 : 0.8) : tier <= 2 ? 0.1 : tier === 3 ? 0.5 : 0.25;
+          }
+          if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
+          if (pi === 0 && (q === 'dom7' || q === 'dom7alt') && !ci0.firstGuide(q) && f.notes[0].rel != null) w *= 0.3; // a dominant arrives on its 3rd or 7th
+          base!.set(f, w);
+        }
         if (f.id === prevId) w *= 0.05;
-        if (avoid?.has(f.id)) w *= 0.05;
-        else if (prevSig && (fragSig(f).rels === prevSig.rels || fragSig(f).shape === prevSig.shape)) w *= 0.12;
-        if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
+        if (avoid?.has(f.id)) w *= 0.01;
+        const ci0 = cellInfo(f);
+        if (prevInfo && (ci0.rels === prevInfo.rels || ci0.shape === prevInfo.shape || ci0.first3 === prevInfo.first3 || ci0.last2 === prevInfo.last2)) w *= 0.12;
         if (seqCells > 0 && f.tags.includes('sequence')) w *= 0.002; // one sequence per lick
+        if (dottedCells > 0 && ci0.dotted) w *= 0.02; // one dotted-8th cell per lick
         const c = sixteenthCount(f);
-        if (c.n16 >= 3 && (n16 + c.n16) / (nAll + c.n) > MAX_SIXTEENTH_SHARE) w *= 0.02;
+        if (c.n16 >= 3 && (n16 + c.n16) / (nAll + c.n) > MAX_SIXTEENTH_SHARE[tier]) w *= 0.02;
         return w;
       });
       if (frag.tags.includes('sequence')) seqCells++;
+      if (cellInfo(frag).dotted) dottedCells++;
       n16 += sixteenthCount(frag).n16;
       nAll += sixteenthCount(frag).n;
       prevId = frag.id;
-      prevSig = fragSig(frag);
+      prevInfo = cellInfo(frag);
       plan.push({ frag, chordIdx: ci, start: tick });
       tick += b * TPB;
       beat += b;
@@ -422,24 +520,44 @@ function landingPenalty(q: ChordQualityId, rel: number, last: boolean): number {
 }
 
 /**
- * Preference terms (score points) used to rank candidates besides difficulty: guide-tone arrivals at chord changes,
- * no long non-scale note on a beat, and staying inside the comfortable tessitura.
+ * Penalty for the lick's closing note by its degree over the last chord: root, 3rd, 5th and 7th are the endings; the 9th (Advanced
+ * and up) and the 6th (always in the minor tonic below Advanced; at Expert everywhere) are coloured endings used sparingly.
  */
-function preference(events: Ev[], chords: LickChord[], comfort: [number, number], lydian: boolean[]): number {
+function closingPenalty(q: ChordQualityId, rel: number, tier: Tier): number {
+  if (rel === 9) return q === 'maj7' ? (tier === 4 ? 2 : 0.4) : tier <= 2 ? 1.2 : tier === 3 ? 1 : 2;
+  if (rel === 2) return tier === 4 ? 1.6 : tier === 3 ? 1.2 : 0.4;
+  if (rel === 0) return 0.3;
+  if (rel === 7) return 0.1;
+  return CHORDS[q].tones.some(t => mod12(t) === rel) ? 0 : 0.6;
+}
+
+/**
+ * Preference terms (score points) used to rank candidates besides difficulty: guide-tone arrivals at chord changes,
+ * no long non-scale note on a beat, staying inside the comfortable tessitura, and the line's own manners: no natural 11
+ * on a Lydian dominant, no arpeggio noodling (a run of more than six chord-tone attacks within an octave), and no
+ * long stepwise 16th run in the last bar.
+ */
+function preference(events: Ev[], chords: LickChord[], comfort: [number, number], lydian: boolean[], tier: Tier): number {
   let pen = 0;
   chords.forEach((ch, ci) => {
     const e = events.find(x => x.start <= ch.start && x.start + evDur(x) > ch.start);
     if (!e || e.midi == null) return;
     pen += landingPenalty(ch.quality, mod12(e.midi - ch.rootPc), ci === chords.length - 1);
   });
+  const closing = [...events].reverse().find(e => e.midi != null);
+  if (closing) { const lc = chords[chords.length - 1]; pen += closingPenalty(lc.quality, mod12((closing.midi as number) - lc.rootPc), tier); }
   let out = 0;
   const altSeen = chords.map(() => false);
   let prevMidi: number | null = null;
+  let runLen = 0;
+  let runLo = 0;
+  let runHi = 0;
+  let sixRun = 0;
+  const endTick = events.length ? events[events.length - 1].start + evDur(events[events.length - 1]) : 0;
   for (const e of events) {
-    if (e.midi == null) continue;
+    if (e.midi == null) { runLen = 0; sixRun = 0; continue; }
     out += Math.max(0, comfort[0] - e.midi, e.midi - comfort[1]);
     if (prevMidi != null && Math.abs(e.midi - prevMidi) >= 10) pen += 14; // a leap of a minor 7th or more
-    prevMidi = e.midi;
     // an anticipation head (attacked within a beat before a change and tied over it) is judged on the arrival chord
     let ci = chordIndexAt(chords, e.start);
     const next = chords[ci + 1];
@@ -449,9 +567,46 @@ function preference(events: Ev[], chords: LickChord[], comfort: [number, number]
     const stressed = e.start % TPB === 0 || evDur(e) >= TPB;
     if (e.start % TPB === 0 && evDur(e) >= TPB && !inScale(e.midi, ch.rootPc, ch.quality)) pen += 1.5;
     if (stressed && rel === 5 && (ch.quality === 'maj7' || (ch.quality === 'dom7' && lydian[ci]))) pen += 10; // avoid note
+    if (rel === 5 && ch.quality === 'dom7' && lydian[ci]) pen += 4; // natural 11 on a Lydian dominant, stressed or not
+    if ((rel === 1 || rel === 3 || rel === 8) && ch.quality === 'dom7' && lydian[ci]) pen += 3; // the altered sound is not Lydian dominant
     if (ch.quality === 'dom7alt' && (rel === 1 || rel === 3 || rel === 8)) altSeen[ci] = true;
+    // arpeggio noodling: more than six chord-tone attacks in a row inside an octave
+    if (CHORDS[ch.quality].tones.some(t => mod12(t) === rel)) {
+      if (runLen === 0) { runLo = e.midi; runHi = e.midi; }
+      runLo = Math.min(runLo, e.midi);
+      runHi = Math.max(runHi, e.midi);
+      if (runHi - runLo > 12) { runLen = 1; runLo = e.midi; runHi = e.midi; } else runLen++;
+      if (runLen > 6 && tier >= 2) pen += (runLen === 7 ? 4 : 2) * (tier === 2 ? 0.6 : 1);
+    } else runLen = 0;
+    // a stepwise 16th run in the last bar longer than four notes
+    if (evDur(e) <= TICKS_PER_16TH && e.start >= endTick - TPBAR && prevMidi != null && Math.abs(e.midi - prevMidi) <= 2 && sixRun > 0) {
+      sixRun++;
+      if (sixRun > 4) pen += 3;
+    } else sixRun = evDur(e) <= TICKS_PER_16TH ? 1 : 0;
+    prevMidi = e.midi;
+  }
+  // Expert is reached by language, not by speed alone: the share of 16th-note attacks is capped (a soft cap at the finished lick)
+  const heads = events.filter(e => e.midi != null);
+  if (heads.length) {
+    const share = heads.filter(e => e.pieces[0] <= TICKS_PER_16TH && e.pieces.length === 1).length / heads.length;
+    pen += Math.max(0, share - SIXTEENTH_SOFT_CAP[tier]) * SIXTEENTH_OVER_COST;
   }
   chords.forEach((ch, ci) => { if (ch.quality === 'dom7alt' && !altSeen[ci]) pen += 6; }); // 7alt must sound altered
+  // ... and not just by one passing note: two altered tones, or one held a quarter on a beat
+  chords.forEach((ch, ci) => {
+    if (ch.quality !== 'dom7alt' || !altSeen[ci]) return;
+    let n = 0;
+    let held = false;
+    for (const e of events) {
+      if (e.midi == null || chordIndexAt(chords, e.start) !== ci || ![1, 3, 8].includes(mod12(e.midi - ch.rootPc))) continue;
+      n++;
+      if (e.start % TPB === 0 && evDur(e) >= TPB) held = true;
+    }
+    if (n < 2 && !held) pen += tier === 1 ? 0 : tier === 2 ? 1.5 : 2;
+  });
+  if (tier >= 2) chords.forEach((ch, ci) => { // m7b5 states its b5
+    if (ch.quality === 'm7b5' && !events.some(e => e.midi != null && chordIndexAt(chords, e.start) === ci && mod12(e.midi - ch.rootPc) === 6)) pen += 1.5;
+  });
   return pen + Math.min(out, 40) * 0.12;
 }
 
@@ -491,25 +646,27 @@ export function generateLick(opts: GenerateOptions): Lick {
   const avoidSet = opts.avoid?.length ? new Set(opts.avoid) : undefined;
   const rng = new Rng(seed);
   // Lydian-dominant chords (tritone-sub bII7, backdoor bVII7): the natural 11 is an avoid note there
-  const lydian = def.slots.map(sl => sl.roman === '♭II7' || sl.roman === '♭VII7');
+  const roles = chordRoles(def.id, def.slots);
+  const lydian = roles.map(r => r === 'lyd');
 
   let best: { notes: LickNote[]; plan: PlanItem[]; cost: number; dist: number; pref: number } | null = null;
   // Without a target the level is the tier (integer, exactly the original weighting). With a target it starts at
   // the target's fractional level and is nudged each round toward where the candidates actually scored.
   let level = target !== undefined ? levelForTarget(target) : reqTier;
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const sharp = 1 + round * 0.8;
+    const sharp = 1 + Math.min(round, 2) * 0.8;
     const roundScores: number[] = [];
+    const baseCache = new Map<string, Map<Fragment, number>>();
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier, avoidSet);
+      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier, avoidSet, roles, baseCache);
       const octaves = chooseOctaves(plan, chords, fitRange);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range) + fixLeaps(events, opts.range);
-      phraseEvents(rng, events, fragStarts, chords, opts.range, { level });
+      phraseEvents(rng, events, fragStarts, chords, opts.range, { level, lydian });
       const notes = eventsToNotes(events, chords);
       const cost = lickCost(events, fragStarts, opts.range, fixes);
       const score = scoreLick(notes, chords, def).score;
-      let pref = preference(events, chords, fitRange, lydian);
+      let pref = preference(events, chords, fitRange, lydian, reqTier);
       let outside = 0;
       for (const n of notes) if (n.midi != null) outside += Math.max(0, opts.range[0] - n.midi, n.midi - opts.range[1]);
       pref += outside * 60; // the hard range outranks everything

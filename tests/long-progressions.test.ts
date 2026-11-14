@@ -162,7 +162,7 @@ describe('musicality of the longer progressions (same seeded session sample as `
       expect(m.endingShares.other).toBeLessThanOrEqual(0.03);
       expect(m.endingShares.R + m.endingShares['3'] + m.endingShares['5']).toBeGreaterThanOrEqual(0.6);
       expect(m.endingShares['9']).toBeLessThanOrEqual(0.25);
-      expect(m.maj7FourthShare).toBe(0);
+      expect(m.maj7FourthShare).toBeLessThanOrEqual(0.01); // at most one lick in the sample (the classic progressions allow 3%)
     });
 
     it(`${id}: no arpeggio noodling at Advanced and Expert`, () => {

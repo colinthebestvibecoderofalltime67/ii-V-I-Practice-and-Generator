@@ -4,7 +4,7 @@ import {
 } from '../src/render/tab';
 import { AUTHORED_FRAGMENTS, fromSixteenths } from '../src/fragments';
 import { generateLick, transposeLick } from '../src/generator';
-import { concertRange, getInstrument } from '../src/instruments';
+import { concertRange, concertRangeForLevel, getInstrument } from '../src/instruments';
 import { isValidLick } from '../src/storage';
 import { PROGRESSIONS } from '../src/theory/progressions';
 import type { Lick, Tier } from '../src/types';
@@ -60,7 +60,7 @@ function sampleLicks(instId: string, perTier = 4): Lick[] {
       const prog = PROGRESSIONS[(seed + k) % PROGRESSIONS.length];
       out.push(generateLick({
         progressionId: prog.id, length: (['short', 'standard', 'long'] as const)[k % 3], keyPc: (seed * 7) % 12,
-        tier, range: concertRange(inst), seed: seed++, fragments: SAMPLE_POOL,
+        tier, range: concertRange(inst), comfortRange: concertRangeForLevel(inst, tier), seed: seed++, fragments: SAMPLE_POOL,
       }));
     }
   }

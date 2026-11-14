@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ENDING_DEGREES, lickMetrics, summarize } from '../src/analysis/musicality';
 import { FRAGMENTS, VOCAB_DROP } from '../src/fragments';
+import { VOCAB_FRAGMENTS } from '../src/fragments/lib/vocab';
+import { ADVANCED_FRAGMENTS } from '../src/fragments/lib/advanced';
+import { PHASE2B_FRAGMENTS } from '../src/fragments/lib/phase2b';
+import { inScale } from '../src/theory/chords';
+import { judgedChord } from '../src/theory/rhythm';
 import { generateLick } from '../src/generator';
 import { Rng } from '../src/generator/rng';
 import { anticipationFitsOldChord, phraseEvents, type Ev } from '../src/generator/connect';
@@ -22,7 +27,11 @@ const rels = (f: Fragment) => f.notes.filter(n => n.rel !== null).map(n => n.rel
 
 describe('library: round-2 cell fixes', () => {
   it('drops the noodling cells, the 16th walls and the hidden-b13 "altered" cells', () => {
-    for (const id of VOCAB_DROP) expect(FRAGMENTS.some(f => f.id === id), id).toBe(false);
+    const raw = new Set([...VOCAB_FRAGMENTS, ...ADVANCED_FRAGMENTS, ...PHASE2B_FRAGMENTS].map(f => f.id));
+    for (const id of VOCAB_DROP) {
+      expect(raw.has(id), `${id} exists in the raw library (a misspelt id would drop nothing)`).toBe(true);
+      expect(FRAGMENTS.some(f => f.id === id), id).toBe(false);
+    }
     for (const id of ['maj7-voc-114', 'm7-voc-93', 'm7-adv-03', 'dom7-adv-01', 'dom7-adv-02', 'm7b5-adv-01', 'maj7-adv-05', 'm7-adv-06', 'maj7-voc-69', 'm6-voc-37', 'dom7alt-voc-28', 'dom7alt-voc-77', 'dom7alt-voc-81']) {
       expect(VOCAB_DROP.has(id), id).toBe(true);
     }
@@ -145,6 +154,22 @@ describe('round-2 musicality targets (same seeded session sample as `npm run mus
   it('anticipated notes never leave the scale of an m7b5, 7alt or Lydian-dominant chord they sound over', () => {
     for (const t of Object.keys(m)) expect(m[t].anticipationClashShare, t).toBe(0); // was 21-30%
     for (const l of all) expect(lickMetrics(l).anticipationClashes, l.id).toBe(0);
+    // independent check (not the generator's own filter): an anticipation head sounds over its OLD chord first; over an
+    // m7b5, 7alt or tritone-sub/backdoor dominant it must be in that chord's scale (Lydian dominant: 0 2 4 6 7 9 10)
+    const LYD = [0, 2, 4, 6, 7, 9, 10];
+    let heads = 0;
+    for (const l of all) {
+      const lydianProg = l.progressionId === 'tritone-251' || l.progressionId === 'backdoor-251';
+      l.notes.forEach((n, i) => {
+        if (n.midi == null || judgedChord(l.notes, i) === n.chord) return;
+        heads++;
+        const old = l.chords[n.chord];
+        const rel = mod12(n.midi - old.rootPc);
+        if (old.quality === 'm7b5' || old.quality === 'dom7alt') expect(inScale(n.midi, old.rootPc, old.quality), `${l.id} note ${i}`).toBe(true);
+        if (lydianProg && old.quality === 'dom7') expect(LYD.includes(rel), `${l.id} note ${i} rel ${rel}`).toBe(true);
+      });
+    }
+    expect(heads).toBeGreaterThan(50);
   });
 
   it('7alt carries real altered colour at the lower tiers, and the m7b5 states its b5', () => {

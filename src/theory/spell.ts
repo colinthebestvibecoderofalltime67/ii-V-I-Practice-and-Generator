@@ -176,7 +176,16 @@ export function spellLick(lick: Lick, inst: Instrument): (SpelledNote | null)[] 
     while (lick.notes[j].tie && lick.notes[j + 1]) j++;
     const next = lick.notes[j + 1];
     const direction = next && next.midi != null && next.midi !== n.midi ? (next.midi > n.midi ? 'up' : 'down') : null;
-    const halfStepDownToChordTone = !!next && next.midi === n.midi - 1 && CHORDS[c.quality].tones.some(x => mod12(x) === mod12(next.midi! - lick.chords[ci].rootPc));
+    // A chromatic upper neighbour is written as a flat (C♭→B♭, F♭→E♭) only in flat contexts: the chord root is flat
+    // and the chord tone it falls to is spelled flat. Over C7 the bebop line stays B→B♭; over B7alt, E→D♯.
+    let halfStepDownToChordTone = false;
+    if (next && next.midi != null && next.midi === n.midi - 1 && roots[ci].acc < 0) {
+      const nci = judgedChord(lick.notes, j + 1);
+      const nc = lick.chords[nci];
+      if (CHORDS[nc.quality].tones.some(x => mod12(x) === mod12(next.midi! - nc.rootPc))) {
+        halfStepDownToChordTone = spellNote(next.midi + t, { root: roots[nci], quality: nc.quality, direction: null, sharps }).acc < 0;
+      }
+    }
     out.push(spellNote(n.midi + t, { root: roots[ci], quality: c.quality, direction, sharps, halfStepDownToChordTone }));
   });
   return out;

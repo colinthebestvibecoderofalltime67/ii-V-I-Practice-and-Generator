@@ -262,3 +262,23 @@ describe('half-diminished 9th and chromatic upper neighbours', () => {
     expect(formatSpelling(t[3]!)).toBe('C♯');
   });
 });
+
+describe('upper-neighbour flats only in flat contexts (review fix)', () => {
+  const lickOf = (keyPc: number, mode: 'major' | 'minor', chords: { rootPc: number; quality: import('../src/types').ChordQualityId; symbol: string }[], midis: number[]): import('../src/types').Lick => ({
+    version: 2, id: 't', seed: 1, progressionId: mode === 'minor' ? 'minor-251' : 'major-251', length: 'standard', keyPc, mode, requestedTier: 3,
+    chords: chords.map((c, i) => ({ ...c, start: i * 48, dur: 48 })),
+    notes: midis.map((m, i) => ({ midi: m, start: i * 12, dur: 12, chord: Math.floor(i / 4) })),
+    totalTicks: chords.length * 48, fragmentIds: [], difficulty: { score: 10, tier: 2, features: [] }, createdAt: 0,
+  });
+  const piano = { id: 'piano', name: 'Piano', transpose: 0, clef: 'treble', range: [48, 84], timbre: 'keys', keyLabel: 'C' } as import('../src/types').Instrument;
+  const names = (l: import('../src/types').Lick) => spellLick(l, piano).map(s => (s ? formatSpelling(s) : '-'));
+  it('C7 in F keeps B→B♭; B7alt in E minor keeps E→D♯; Fm7 in C keeps E→E♭', () => {
+    expect(names(lickOf(5, 'major', [{ rootPc: 0, quality: 'dom7', symbol: 'C7' }], [72, 71, 70, 67]))[1]).toBe('B');
+    expect(names(lickOf(4, 'minor', [{ rootPc: 11, quality: 'dom7alt', symbol: 'B7alt' }], [71, 64, 63, 59]))[1]).toBe('E');
+    expect(names(lickOf(0, 'major', [{ rootPc: 5, quality: 'm7', symbol: 'Fm7' }], [65, 64, 63, 60]))[1]).toBe('E');
+  });
+  it('E♭m7 keeps C♭→B♭ and A♭maj7 keeps F♭→E♭', () => {
+    expect(names(lickOf(1, 'major', [{ rootPc: 3, quality: 'm7', symbol: 'E♭m7' }], [75, 71, 70, 66]))[1]).toBe('C♭');
+    expect(names(lickOf(8, 'major', [{ rootPc: 8, quality: 'maj7', symbol: 'A♭maj7' }], [68, 64, 63, 60]))[1]).toBe('F♭');
+  });
+});

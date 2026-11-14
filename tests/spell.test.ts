@@ -9,6 +9,7 @@ import { keySignatureName, mod12 } from '../src/theory/pitch';
 import { LENGTHS, PROGRESSIONS, expandProgression, getProgression } from '../src/theory/progressions';
 import { INSTRUMENTS, concertRange, getInstrument } from '../src/instruments';
 import { generateLick } from '../src/generator';
+import { FULL_SWEEP } from './_samples';
 import type { ChordQualityId, Lick, LickNote, LengthId } from '../src/types';
 
 const sp = (s: string): Spelled => ({
@@ -187,7 +188,9 @@ describe('sweep', () => {
               const rk = inst.id;
               if (!rangeCache.has(rk)) rangeCache.set(rk, concertRange(inst));
               const range = rangeCache.get(rk)!;
-              for (const seed of [1, 2]) {
+              // default: one seed, and each instrument takes every other key (alternating by instrument), so all keys stay covered; SWEEP=full: both seeds, all keys
+              if (!FULL_SWEEP && (keyPc + INSTRUMENTS.indexOf(inst)) % 2 === 1) continue;
+              for (const seed of FULL_SWEEP ? [1, 2] : [1]) {
                 const tier = ((seed + keyPc) % 4 + 1) as 1 | 2 | 3 | 4;
                 const lick = generateLick({ progressionId: p.id, length, keyPc, tier, range, seed });
                 licks++;

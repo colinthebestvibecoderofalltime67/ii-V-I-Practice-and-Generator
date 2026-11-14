@@ -7,6 +7,7 @@ import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
 import { decodeLick, encodeLick, parseShareHash, shareUrl } from '../src/share';
 import { isTupletDur } from '../src/theory/rhythm';
 import type { LengthId, Lick, Tier } from '../src/types';
+import { FULL_SWEEP } from './_samples';
 
 const lengths = Object.keys(LENGTHS) as LengthId[];
 const range = concertRange(getInstrument('alto'));
@@ -107,16 +108,28 @@ describe('share codes', () => {
   });
 
   it('sweep: every generated lick (instruments x progressions x lengths x targets x seeds) encodes and round-trips', () => {
+    // Default: every instrument x progression x length with 2 of the 4 targets (alternating by instrument) and 1 seed (~450 licks);
+    // SWEEP=full: all 4 targets x 2 seeds (1800 licks).
+    const targets = [15, 50, 85, 100];
+    const seeds = FULL_SWEEP ? 2 : 1;
     let n = 0;
-    for (const inst of INSTRUMENTS) for (const p of PROGRESSIONS) for (const length of lengths) for (const target of [15, 50, 85, 100]) for (let s = 0; s < 2; s++) {
-      const tier = ([1, 2, 3, 4] as Tier[])[Math.min(3, Math.floor(target / 26))];
-      const l = generateLick({ progressionId: p.id, length, keyPc: (s * 7 + target + n) % 12, tier, targetScore: target, range: concertRange(inst), seed: s * 977 + target + n });
-      const d = decodeLick(encodeLick(l));
-      expect(d, `${inst.id} ${l.id}`).not.toBeNull();
-      expect(d!.notes).toEqual(l.notes);
-      n++;
-    }
-    expect(n).toBe(INSTRUMENTS.length * PROGRESSIONS.length * 3 * 4 * 2);
-    expect(n).toBeGreaterThan(1500);
+    let expected = 0;
+    INSTRUMENTS.forEach((inst, ii) => {
+      for (const p of PROGRESSIONS) for (const length of lengths) targets.forEach((target, ti) => {
+        if (!FULL_SWEEP && (ti + ii) % 2 === 1) return;
+        for (let s = 0; s < seeds; s++) {
+          expected++;
+          const tier = ([1, 2, 3, 4] as Tier[])[Math.min(3, Math.floor(target / 26))];
+          const l = generateLick({ progressionId: p.id, length, keyPc: (s * 7 + target + n) % 12, tier, targetScore: target, range: concertRange(inst), seed: s * 977 + target + n });
+          const d = decodeLick(encodeLick(l));
+          expect(d, `${inst.id} ${l.id}`).not.toBeNull();
+          expect(d!.notes).toEqual(l.notes);
+          n++;
+        }
+      });
+    });
+    expect(n).toBe(expected);
+    expect(n).toBe(INSTRUMENTS.length * PROGRESSIONS.length * 3 * (FULL_SWEEP ? 4 * 2 : 2));
+    expect(n).toBeGreaterThan(FULL_SWEEP ? 1500 : 400);
   }, 240000);
 });

@@ -1,21 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { FRAGMENTS, PROTOTYPE_OVERRIDES } from '../src/fragments';
-import { generateLick } from '../src/generator';
-import { posToScore, tierForScore } from '../src/difficulty/score';
-import { concertRange, concertRangeForLevel, getInstrument } from '../src/instruments';
-import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
 import { summarize } from '../src/analysis/musicality';
 import { VOCAB_FRAGMENTS } from '../src/fragments/lib/vocab';
 import { ADVANCED_FRAGMENTS } from '../src/fragments/lib/advanced';
 import { PROTOTYPE_FRAGMENTS } from '../src/fragments/lib/prototype';
 import { ORIGINAL_FRAGMENTS } from '../src/fragments/lib/original';
 import { RENDERABLE_DURS, TPB } from '../src/types';
-import type { ChordQualityId, Fragment, LengthId, Lick, Tier } from '../src/types';
+import type { ChordQualityId, Fragment, Tier } from '../src/types';
 import { isChordToneOrTension } from '../src/theory/chords';
 import { findTupletGroups, isTupletDur } from '../src/theory/rhythm';
 import { isValidFragment } from '../src/generator/generate';
 import { TRIPLET_FRAGMENTS } from '../src/fragments/lib/triplets';
 import { parseNotes } from '../src/fragments/lib/notation';
+import { sessionSample } from './_samples';
 
 const QUALS: ChordQualityId[] = ['m7', 'm7b5', 'dom7', 'dom7alt', 'maj7', 'm6'];
 const ENDING_OK = new Set([0, 2, 3, 4, 7, 9, 11]);
@@ -355,21 +352,7 @@ describe('vocabulary breadth keeps cells from dominating', () => {
   });
 
   it('no cell appears in more than ~5% of the licks of any tier in a practice session (same seeded sample as `npm run musicality`)', () => {
-    const POSITIONS = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95];
-    const insts = ['alto', 'guitar'].map(getInstrument);
-    const byTier: Record<Tier, Lick[]> = { 1: [], 2: [], 3: [], 4: [] };
-    let seed = 1;
-    const recent: Lick[] = []; // like the app: each lick avoids the cells of the previous 8 (a practice session)
-    for (const p of PROGRESSIONS) for (const length of Object.keys(LENGTHS) as LengthId[]) for (const pos of POSITIONS) for (let s = 0; s < 6; s++) {
-      const inst = insts[s % 2];
-      const target = posToScore(pos);
-      const l = generateLick({
-        progressionId: p.id, length, keyPc: (seed * 5) % 12, tier: 1, targetScore: target, range: concertRange(inst),
-        comfortRange: concertRangeForLevel(inst, tierForScore(target)), avoid: recent.slice(-8).flatMap(r => r.fragmentIds), seed: seed++,
-      });
-      recent.push(l);
-      byTier[l.requestedTier].push(l);
-    }
+    const { byTier } = sessionSample();
     for (const t of [1, 2, 3, 4] as Tier[]) {
       const m = summarize(byTier[t]);
       // 180-270 licks per tier: 5% is 9-14 licks, so allow a little noise; Expert has the fewest cells that reach its

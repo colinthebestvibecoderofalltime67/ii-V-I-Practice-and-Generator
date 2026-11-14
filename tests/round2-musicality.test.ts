@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { ENDING_DEGREES, lickMetrics, summarize } from '../src/analysis/musicality';
 import { FRAGMENTS, VOCAB_DROP } from '../src/fragments';
 import { VOCAB_FRAGMENTS } from '../src/fragments/lib/vocab';
@@ -6,14 +6,12 @@ import { ADVANCED_FRAGMENTS } from '../src/fragments/lib/advanced';
 import { PHASE2B_FRAGMENTS } from '../src/fragments/lib/phase2b';
 import { inScale } from '../src/theory/chords';
 import { judgedChord } from '../src/theory/rhythm';
-import { generateLick } from '../src/generator';
 import { Rng } from '../src/generator/rng';
 import { anticipationFitsOldChord, phraseEvents, type Ev } from '../src/generator/connect';
 import { chordRoles } from '../src/generator/generate';
-import { posToScore, tierForScore } from '../src/difficulty/score';
-import { concertRange, concertRangeForLevel, getInstrument } from '../src/instruments';
-import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
-import { TIER_NAMES, type Fragment, type LengthId, type Lick, type LickChord, type Tier } from '../src/types';
+import { PROGRESSIONS } from '../src/theory/progressions';
+import { sessionSample } from './_samples';
+import { TIER_NAMES, type Fragment, type Lick, type LickChord, type Tier } from '../src/types';
 
 /** Round-2 review (Opus jazz-educator): dominant colour by function, noodling, thin altered cells, Expert 16ths, endings, anticipation filter. */
 
@@ -116,18 +114,15 @@ describe('chord roles', () => {
 });
 
 describe('round-2 musicality targets (same seeded session sample as `npm run musicality`)', () => {
-  const INSTS = ['alto', 'guitar'].map(getInstrument);
-  const all: Lick[] = [];
-  const byTier: Record<Tier, Lick[]> = { 1: [], 2: [], 3: [], 4: [] };
-  let seed = 1;
-  for (const p of PROGRESSIONS) for (const length of Object.keys(LENGTHS) as LengthId[]) for (const pos of [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]) for (let s = 0; s < 6; s++) {
-    const inst = INSTS[s % INSTS.length];
-    const l = generateLick({ progressionId: p.id, length, keyPc: (seed * 5) % 12, tier: 1, targetScore: posToScore(pos), range: concertRange(inst), comfortRange: concertRangeForLevel(inst, tierForScore(posToScore(pos))), avoid: all.slice(-8).flatMap(r => r.fragmentIds), seed: seed++ });
-    all.push(l);
-    byTier[l.requestedTier].push(l);
-  }
-  const m = Object.fromEntries(([1, 2, 3, 4] as Tier[]).map(t => [TIER_NAMES[t], summarize(byTier[t])]));
-  const lydLicks = all.filter(l => l.progressionId === 'tritone-251' || l.progressionId === 'backdoor-251');
+  let all: Lick[];
+  let m: Record<string, ReturnType<typeof summarize>>;
+  let lydLicks: Lick[];
+  beforeAll(() => {
+    const sample = sessionSample(); // built on first use, not at collection time
+    all = sample.all;
+    m = Object.fromEntries(([1, 2, 3, 4] as Tier[]).map(t => [TIER_NAMES[t], summarize(sample.byTier[t])]));
+    lydLicks = all.filter(l => l.progressionId === 'tritone-251' || l.progressionId === 'backdoor-251');
+  }, 60_000);
 
   it('tritone-sub and backdoor dominants sound Lydian: #11, no natural 11, no b9/#9/b13', () => {
     const s = summarize(lydLicks);

@@ -13,6 +13,7 @@ import { Player, type PlayOptions } from './audio/player';
 import { lickToMidi } from './export/midi';
 import { Store, type Settings, type StoredEntry } from './storage';
 import { Library } from './ui/library';
+import { parseShareHash, shareUrl } from './share';
 import { downloadBlob, fileName, isTransposing, keyLabel, progressionName, titleKeyLabel } from './ui/format';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -485,6 +486,44 @@ async function doPdf(): Promise<void> {
   }
 }
 
+/* ---- share links (src/share.ts): `#l=<code>` carries the lick at concert pitch ---- */
+
+/** Copy text without the async clipboard API: select a readonly input and execCommand('copy'). */
+function copyFallback(text: string): boolean {
+  const input = document.createElement('input');
+  input.readOnly = true;
+  input.value = text;
+  input.setAttribute('aria-hidden', 'true');
+  input.tabIndex = -1;
+  input.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.append(input);
+  input.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  input.remove();
+  return ok;
+}
+
+async function doShare(): Promise<void> {
+  if (!lick) return;
+  const url = shareUrl(lick, location.href);
+  $('btn-share').dataset.url = url;
+  let ok = false;
+  try { await navigator.clipboard.writeText(url); ok = true; } catch { ok = copyFallback(url); }
+  exportStatus(ok ? 'Link copied.' : 'Could not copy the link.', ok ? 3000 : 6000);
+}
+
+/** Open a lick from `#l=...` if present, then clear the hash so a reload does not import it again. Returns true if shown. */
+function openSharedLick(): boolean {
+  const r = parseShareHash(location.hash);
+  if (r.kind === 'none') return false;
+  try { window.history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ }
+  if (r.kind === 'invalid') { exportStatus("That lick link isn't valid.", 6000); return false; }
+  showLick(transposeLick(r.lick, r.lick.keyPc, concertRange(inst()), comfortFor(r.lick)), true);
+  exportStatus('Opened a shared lick.', 4000);
+  return true;
+}
+
 /* ---------------------------------------------------------------- menus & dialogs */
 
 function setupExportMenu(): void {
@@ -515,6 +554,7 @@ function setupExportMenu(): void {
   });
   $('btn-midi').addEventListener('click', () => { close(true); doMidi(); });
   $('btn-pdf').addEventListener('click', () => { close(true); void doPdf(); });
+  $('btn-share').addEventListener('click', () => { close(true); void doShare(); });
 }
 
 function setupDialog(id: string, openerId: string): HTMLDialogElement {
@@ -655,7 +695,7 @@ buildStaticControls();
 fillKeyOptions();
 syncControls();
 bind();
-if (history.length) {
+if (openSharedLick()) { /* shown */ } else if (history.length) {
   const h = history[0].lick;
   showLick(transposeLick(h, h.keyPc, concertRange(inst()), comfortFor(h)), false);
 } else {

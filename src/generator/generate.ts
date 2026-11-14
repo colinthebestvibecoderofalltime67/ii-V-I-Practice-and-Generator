@@ -7,7 +7,7 @@ import { findTupletGroups, isTupletDur, type TupletKind } from '../theory/rhythm
 import { LENGTHS, expandProgression, getProgression } from '../theory/progressions';
 import { SCORE_CEIL, TIER_THRESHOLDS, scoreLick, scoreToPos, tierForScore } from '../difficulty/score';
 import { Rng, randomSeed } from './rng';
-import { type Ev, chordIndexAt, eventsToNotes, evDur, fixJoins, fixLeaps, leapPenalty, phraseEvents } from './connect';
+import { type Ev, eventsToNotes, fixJoins, fixLeaps, leapPenalty, phraseEvents } from './connect';
 
 export interface GenerateOptions {
   progressionId: string;
@@ -39,6 +39,11 @@ export interface GenerateOptions {
 
 const CANDIDATES_PER_ROUND = 50;
 const MAX_ROUNDS = 7;
+/**
+ * A target below the simplest possible licks can never be reached: once the level is at its floor and a round from the
+ * fourth on is still too hard, more rounds only redraw the same distribution, so searching stops.
+ */
+const FLOOR_AFTER_ROUND = 4;
 
 /* ------------------------------ fragment pools ------------------------------ */
 
@@ -88,8 +93,66 @@ function synthFragment(q: ChordQualityId, beats: 2 | 4, ending: boolean): Fragme
   return { id, qualities: [q], beats, tags: ['arpeggio', 'guide-tone'], level: 1, source: 'original', notes };
 }
 
+/**
+ * Static, per-pool data about a list of fragments (built once per fragment array, alongside the pool cache): the cell
+ * info as interned integers (so "same figure as the previous cell" is an integer compare), the 16th-note counts, flags
+ * and inverted indexes. buildPlan only touches the few cells whose weight depends on the previous pick.
+ */
+interface PoolData {
+  frags: Fragment[];
+  n: number;
+  ids: string[];
+  info: CellInfo[];
+  /** interned rels / shape / first3 / last2 */
+  rels: Int32Array; shape: Int32Array; first3: Int32Array; last2: Int32Array;
+  n16: Int32Array; nAttacks: Int32Array;
+  seq: Uint8Array; dotted: Uint8Array;
+  seqList: number[]; dottedList: number[];
+  /** cells with at least three 16th attacks (the only ones the 16th-share cap can hit) */
+  capList: number[];
+  byId: Map<string, number[]>;
+  byRels: Map<number, number[]>; byShape: Map<number, number[]>; byFirst3: Map<number, number[]>; byLast2: Map<number, number[]>;
+}
+
+const internTable = new Map<string, number>();
+function intern(s: string): number {
+  let v = internTable.get(s);
+  if (v === undefined) { v = internTable.size; internTable.set(s, v); }
+  return v;
+}
+
+function addTo(m: Map<number, number[]>, key: number, i: number): void {
+  const l = m.get(key);
+  if (l) l.push(i); else m.set(key, [i]);
+}
+
+function makePoolData(frags: Fragment[]): PoolData {
+  const n = frags.length;
+  const pd: PoolData = {
+    frags, n, ids: frags.map(f => f.id), info: frags.map(cellInfo),
+    rels: new Int32Array(n), shape: new Int32Array(n), first3: new Int32Array(n), last2: new Int32Array(n),
+    n16: new Int32Array(n), nAttacks: new Int32Array(n), seq: new Uint8Array(n), dotted: new Uint8Array(n),
+    seqList: [], dottedList: [], capList: [], byId: new Map(),
+    byRels: new Map(), byShape: new Map(), byFirst3: new Map(), byLast2: new Map(),
+  };
+  for (let i = 0; i < n; i++) {
+    const f = frags[i];
+    const c = pd.info[i];
+    pd.rels[i] = intern(c.rels); pd.shape[i] = intern(c.shape); pd.first3[i] = intern(c.first3); pd.last2[i] = intern(c.last2);
+    const sc = sixteenthCount(f);
+    pd.n16[i] = sc.n16; pd.nAttacks[i] = sc.n;
+    if (f.tags.includes('sequence')) { pd.seq[i] = 1; pd.seqList.push(i); }
+    if (c.dotted) { pd.dotted[i] = 1; pd.dottedList.push(i); }
+    if (sc.n16 >= 3) pd.capList.push(i);
+    const l = pd.byId.get(f.id);
+    if (l) l.push(i); else pd.byId.set(f.id, [i]);
+    addTo(pd.byRels, pd.rels[i], i); addTo(pd.byShape, pd.shape[i], i); addTo(pd.byFirst3, pd.first3[i], i); addTo(pd.byLast2, pd.last2[i], i);
+  }
+  return pd;
+}
+
 interface Pools {
-  get(q: ChordQualityId, beats: 2 | 4, ending: boolean): Fragment[];
+  get(q: ChordQualityId, beats: 2 | 4, ending: boolean): PoolData;
 }
 
 /** Pools are built once per fragment list (the library is large; validating it on every lick was the main cost). */
@@ -99,14 +162,15 @@ function makePools(frags: Fragment[]): Pools {
   const hit = poolCache.get(frags);
   if (hit) return hit;
   const valid = frags.filter(isValidFragment);
-  const cache = new Map<string, Fragment[]>();
+  const cache = new Map<string, PoolData>();
   const pools: Pools = {
     get(q, beats, ending) {
       const key = `${q}|${beats}|${ending ? 1 : 0}`;
       let v = cache.get(key);
       if (!v) {
-        v = valid.filter(f => f.qualities.includes(q) && f.beats === beats && !!f.ending === ending);
-        if (!v.length) v = [synthFragment(q, beats, ending)];
+        let fl = valid.filter(f => f.qualities.includes(q) && f.beats === beats && !!f.ending === ending);
+        if (!fl.length) fl = [synthFragment(q, beats, ending)];
+        v = makePoolData(fl);
         cache.set(key, v);
       }
       return v;
@@ -307,17 +371,148 @@ function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
   return c.tones.some(t => mod12(t) === r) || c.tensions.some(t => mod12(t) === r);
 }
 
+/** Static weights of one pool in one context (chord role, first cell or not) for one round, with prefix sums. */
+interface BaseWeights {
+  w: Float64Array;
+  /** cum[i] = w[0] + ... + w[i], summed left to right (so cum[n-1] is the same total the linear scan used) */
+  cum: Float64Array;
+  total: number;
+}
+/** Per round: pool -> BaseWeights by (role, first cell) slot. */
+type RoundCache = Map<PoolData, (BaseWeights | undefined)[]>;
+const ROLE_SLOT: Record<ChordRole, number> = { lyd: 0, primaryV: 1, alt: 2, other: 3 };
+
+/** Cells of a pool the previous picks single out (indexes of cells in the pool); `mask[i]` = recently heard. */
+interface AvoidInfo { mask: Uint8Array; list: number[] }
+
+function baseWeights(
+  pd: PoolData, q: ChordQualityId, role: ChordRole, level: number, sharp: number, tier: Tier, first: boolean, ending: boolean,
+): BaseWeights {
+  const n = pd.n;
+  const w = new Float64Array(n);
+  const cum = new Float64Array(n);
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const f = pd.frags[i];
+    let x = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
+    x *= tripletFactor(f, level, tier);
+    const ci0 = pd.info[i];
+    x *= roleWeight(f, q, role, level);
+    if (ending) {
+      // the closing note: root/3rd/5th beat the 9th and the 6th (a 6th in the minor tonic is a Beginner/Intermediate trap)
+      if (ci0.lastRel === 2 && tier >= 3) x *= tier === 4 ? 0.3 : 0.4;
+      if (ci0.lastRel === 9) x *= q === 'maj7' ? (tier === 4 ? 0.25 : 0.8) : tier <= 2 ? 0.1 : tier === 3 ? 0.5 : 0.25;
+    }
+    if (first && !firstNoteOk(f, q)) x *= 0.2;
+    if (first && (q === 'dom7' || q === 'dom7alt') && !ci0.firstGuide(q) && f.notes[0].rel != null) x *= 0.3; // a dominant arrives on its 3rd or 7th
+    w[i] = x;
+    total += x;
+    cum[i] = total;
+  }
+  return { w, cum, total };
+}
+
+/* Scratch for pickCell (single-threaded; grown on demand, never allocated per pick). */
+let scratchSize = 0;
+let touched = new Int32Array(0);
+let stampArr = new Int32Array(0);
+let dcum = new Float64Array(0);
+let stampGen = 0;
+function ensureScratch(n: number): void {
+  if (n <= scratchSize) return;
+  scratchSize = Math.max(n, 256);
+  touched = new Int32Array(scratchSize);
+  stampArr = new Int32Array(scratchSize);
+  dcum = new Float64Array(scratchSize);
+  stampGen = 0;
+}
+let nTouched = 0;
+function touch(i: number): void {
+  if (stampArr[i] !== stampGen) { stampArr[i] = stampGen; touched[nTouched++] = i; }
+}
+function touchAll(l: number[] | undefined): void {
+  if (l) for (let j = 0; j < l.length; j++) touch(l[j]);
+}
+
+/** Running state of buildPlan that the per-pick factors depend on. */
+interface PickState {
+  prevId: string;
+  hasPrev: boolean;
+  pRels: number; pShape: number; pFirst3: number; pLast2: number;
+  seqCells: number; dottedCells: number; n16: number; nAll: number;
+}
+
+/**
+ * Weighted pick of one cell. The static weights come from the per-round BaseWeights; only the cells whose weight depends on
+ * the previous picks (same id / same figure as the previous cell, heard recently, a second sequence or dotted cell, the 16th-share cap)
+ * are adjusted, and the pick is a binary search over the prefix sums. Same distribution as the linear scan, no allocation.
+ */
+function pickCell(rng: Rng, pd: PoolData, bw: BaseWeights, st: PickState, av: AvoidInfo | undefined, tier: Tier): number {
+  const n = pd.n;
+  ensureScratch(n);
+  stampGen++;
+  nTouched = 0;
+  const cap = MAX_SIXTEENTH_SHARE[tier];
+  touchAll(pd.byId.get(st.prevId));
+  if (av) touchAll(av.list);
+  if (st.hasPrev) {
+    touchAll(pd.byRels.get(st.pRels)); touchAll(pd.byShape.get(st.pShape));
+    touchAll(pd.byFirst3.get(st.pFirst3)); touchAll(pd.byLast2.get(st.pLast2));
+  }
+  if (st.seqCells > 0) touchAll(pd.seqList);
+  if (st.dottedCells > 0) touchAll(pd.dottedList);
+  const capList = pd.capList;
+  for (let j = 0; j < capList.length; j++) {
+    const i = capList[j];
+    if ((st.n16 + pd.n16[i]) / (st.nAll + pd.nAttacks[i]) > cap) touch(i);
+  }
+  const m = nTouched;
+  // ascending order (insertion sort: m is small)
+  for (let a = 1; a < m; a++) {
+    const v = touched[a];
+    let b = a - 1;
+    while (b >= 0 && touched[b] > v) { touched[b + 1] = touched[b]; b--; }
+    touched[b + 1] = v;
+  }
+  let total = bw.total;
+  let run = 0;
+  for (let k = 0; k < m; k++) {
+    const i = touched[k];
+    let w = bw.w[i];
+    const base = w;
+    if (pd.ids[i] === st.prevId) w *= 0.05;
+    if (av && av.mask[i]) w *= 0.01;
+    if (st.hasPrev && (pd.rels[i] === st.pRels || pd.shape[i] === st.pShape || pd.first3[i] === st.pFirst3 || pd.last2[i] === st.pLast2)) w *= 0.12;
+    if (st.seqCells > 0 && pd.seq[i]) w *= 0.002; // one sequence per lick
+    if (st.dottedCells > 0 && pd.dotted[i]) w *= 0.02; // one dotted-8th cell per lick
+    if (pd.n16[i] >= 3 && (st.n16 + pd.n16[i]) / (st.nAll + pd.nAttacks[i]) > cap) w *= 0.02;
+    run += w - base;
+    dcum[k] = run;
+  }
+  total += run;
+  if (!(total > 0)) return rng.int(n);
+  const r = rng.next() * total;
+  const cum = bw.cum;
+  // find the segment: first touched cell whose adjusted prefix exceeds r
+  let k = 0;
+  while (k < m && cum[touched[k]] + dcum[k] <= r) k++;
+  const off = k === 0 ? 0 : dcum[k - 1];
+  let lo = k === 0 ? 0 : touched[k - 1] + 1;
+  let hi = k < m ? touched[k] : n - 1; // hi satisfies the predicate (or is the fallback: the last cell)
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] + off > r) hi = mid; else lo = mid + 1;
+  }
+  return Math.min(lo, n - 1);
+}
+
 function buildPlan(
   rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number, tier: Tier,
-  avoid: ReadonlySet<string> | undefined, roles: ChordRole[], baseCache: Map<string, Map<Fragment, number>>,
+  avoid: ReadonlySet<string> | undefined, roles: ChordRole[], roundCache: RoundCache, avoidCache: Map<PoolData, AvoidInfo>,
 ): PlanItem[] {
   const plan: PlanItem[] = [];
-  let prevInfo: CellInfo | null = null;
+  const st: PickState = { prevId: '', hasPrev: false, pRels: 0, pShape: 0, pFirst3: 0, pLast2: 0, seqCells: 0, dottedCells: 0, n16: 0, nAll: 0 };
   let beat = 0;
-  let seqCells = 0;
-  let dottedCells = 0;
-  let n16 = 0;
-  let nAll = 0;
   chords.forEach((chord, ci) => {
     const isLastSlot = ci === chords.length - 1;
     const q = chord.quality;
@@ -328,46 +523,34 @@ function buildPlan(
     }
     const parts = partitionSlot(rng, slotBeats[ci], beat, endingPiece, roles[ci] === 'lyd' ? 0.25 : 0.6); // 2-beat cells: the Lydian-dominant cells are mostly short
     let tick = chord.start;
-    let prevId = '';
+    st.prevId = '';
     parts.forEach((b, pi) => {
       const ending = isLastSlot && pi === parts.length - 1;
-      const pool = pools.get(q, b as 2 | 4, ending);
-      // Weight factors that depend only on the cell, the chord and the round (level, sharpness) are cached per round.
-      const ctx = `${q}|${roles[ci]}|${pi === 0 ? 1 : 0}|${ending ? 1 : 0}`;
-      let base = baseCache.get(ctx);
-      if (!base) { base = new Map(); baseCache.set(ctx, base); }
-      const frag = rng.weighted(pool, f => {
-        let w = base!.get(f);
-        if (w === undefined) {
-          w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
-          w *= tripletFactor(f, level, tier);
-          const ci0 = cellInfo(f);
-          w *= roleWeight(f, q, roles[ci], level);
-          if (ending) {
-            // the closing note: root/3rd/5th beat the 9th and the 6th (a 6th in the minor tonic is a Beginner/Intermediate trap)
-            if (ci0.lastRel === 2 && tier >= 3) w *= tier === 4 ? 0.3 : 0.4;
-            if (ci0.lastRel === 9) w *= q === 'maj7' ? (tier === 4 ? 0.25 : 0.8) : tier <= 2 ? 0.1 : tier === 3 ? 0.5 : 0.25;
-          }
-          if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
-          if (pi === 0 && (q === 'dom7' || q === 'dom7alt') && !ci0.firstGuide(q) && f.notes[0].rel != null) w *= 0.3; // a dominant arrives on its 3rd or 7th
-          base!.set(f, w);
+      const pd = pools.get(q, b as 2 | 4, ending);
+      // Weight factors that depend only on the cell, the chord and the round (level, sharpness) are computed once per round.
+      let slots = roundCache.get(pd);
+      if (!slots) { slots = new Array(8); roundCache.set(pd, slots); }
+      const slot = ROLE_SLOT[roles[ci]] * 2 + (pi === 0 ? 1 : 0);
+      let bw = slots[slot];
+      if (!bw) { bw = baseWeights(pd, q, roles[ci], level, sharp, tier, pi === 0, ending); slots[slot] = bw; }
+      let av: AvoidInfo | undefined;
+      if (avoid) {
+        av = avoidCache.get(pd);
+        if (!av) {
+          av = { mask: new Uint8Array(pd.n), list: [] };
+          for (let i = 0; i < pd.n; i++) if (avoid.has(pd.ids[i])) { av.mask[i] = 1; av.list.push(i); }
+          avoidCache.set(pd, av);
         }
-        if (f.id === prevId) w *= 0.05;
-        if (avoid?.has(f.id)) w *= 0.01;
-        const ci0 = cellInfo(f);
-        if (prevInfo && (ci0.rels === prevInfo.rels || ci0.shape === prevInfo.shape || ci0.first3 === prevInfo.first3 || ci0.last2 === prevInfo.last2)) w *= 0.12;
-        if (seqCells > 0 && f.tags.includes('sequence')) w *= 0.002; // one sequence per lick
-        if (dottedCells > 0 && ci0.dotted) w *= 0.02; // one dotted-8th cell per lick
-        const c = sixteenthCount(f);
-        if (c.n16 >= 3 && (n16 + c.n16) / (nAll + c.n) > MAX_SIXTEENTH_SHARE[tier]) w *= 0.02;
-        return w;
-      });
-      if (frag.tags.includes('sequence')) seqCells++;
-      if (cellInfo(frag).dotted) dottedCells++;
-      n16 += sixteenthCount(frag).n16;
-      nAll += sixteenthCount(frag).n;
-      prevId = frag.id;
-      prevInfo = cellInfo(frag);
+      }
+      const idx = pickCell(rng, pd, bw, st, av, tier);
+      const frag = pd.frags[idx];
+      if (pd.seq[idx]) st.seqCells++;
+      if (pd.dotted[idx]) st.dottedCells++;
+      st.n16 += pd.n16[idx];
+      st.nAll += pd.nAttacks[idx];
+      st.prevId = pd.ids[idx];
+      st.hasPrev = true;
+      st.pRels = pd.rels[idx]; st.pShape = pd.shape[idx]; st.pFirst3 = pd.first3[idx]; st.pLast2 = pd.last2[idx];
       plan.push({ frag, chordIdx: ci, start: tick });
       tick += b * TPB;
       beat += b;
@@ -383,76 +566,96 @@ const K_MAX = 5;
 /** Octave offset 0 puts the chord root at MIDI 48 + rootPc. */
 const baseOf = (rootPc: number) => 48 + rootPc;
 
-interface FitInfo {
-  first: number | null;
-  last: number | null;
-  mean: number;
-  viol: number;
+/** Pitch summary of a fragment's pitched notes (rel from the chord root): enough to rebuild first / last / mean at any octave. */
+interface FragPitch { first: number; last: number; sum: number; cnt: number; rels: number[] }
+const fragPitches = new WeakMap<Fragment, FragPitch>();
+function fragPitch(f: Fragment): FragPitch {
+  let v = fragPitches.get(f);
+  if (!v) {
+    v = { first: 0, last: 0, sum: 0, cnt: 0, rels: [] };
+    for (const n of f.notes) {
+      if (n.rel == null) continue;
+      if (!v.cnt) v.first = n.rel;
+      v.last = n.rel;
+      v.sum += n.rel;
+      v.cnt++;
+      v.rels.push(n.rel);
+    }
+    fragPitches.set(f, v);
+  }
+  return v;
 }
 
-function fitInfo(f: Fragment, base: number, k: number, range: [number, number]): FitInfo {
-  let first: number | null = null;
-  let last: number | null = null;
-  let sum = 0;
-  let cnt = 0;
-  let viol = 0;
-  for (const n of f.notes) {
-    if (n.rel == null) continue;
-    const p = base + n.rel + 12 * k;
-    if (first == null) first = p;
-    last = p;
-    sum += p;
-    cnt++;
-    viol += Math.max(0, range[0] - p, p - range[1]);
+const K_COUNT = K_MAX - K_MIN + 1;
+/** Range violation of a fragment at every (root pitch class, octave), computed once per lick request and fragment. */
+type FitMemo = Map<Fragment, Float64Array>;
+
+function violOf(memo: FitMemo, f: Fragment, rootPc: number, k: number, range: [number, number]): number {
+  let row = memo.get(f);
+  if (!row) { row = new Float64Array(12 * K_COUNT).fill(-1); memo.set(f, row); }
+  const slot = rootPc * K_COUNT + (k - K_MIN);
+  let v = row[slot];
+  if (v < 0) {
+    v = 0;
+    const base = baseOf(rootPc) + 12 * k;
+    const rels = fragPitch(f).rels;
+    for (let i = 0; i < rels.length; i++) {
+      const p = base + rels[i];
+      v += Math.max(0, range[0] - p, p - range[1]);
+    }
+    row[slot] = v;
   }
-  return { first, last, mean: cnt ? sum / cnt : (range[0] + range[1]) / 2, viol };
+  return v;
 }
+
+/* Scratch for the Viterbi (grown on demand). */
+let vitCost = new Float64Array(0);
+let vitFrom = new Int8Array(0);
+const joinPen = new Float64Array(2 * K_COUNT - 1);
 
 /** Viterbi over per-fragment octave choices: smooth joins, inside the range, centred. */
-function chooseOctaves(plan: PlanItem[], chords: LickChord[], range: [number, number]): number[] {
+function chooseOctaves(plan: PlanItem[], chords: LickChord[], range: [number, number], memo: FitMemo): number[] {
   const centre = range[0] + 0.4 * (range[1] - range[0]);
-  const ks: number[] = [];
-  for (let k = K_MIN; k <= K_MAX; k++) ks.push(k);
-  type Cell = { cost: number; from: number };
-  const table: Cell[][] = [];
-  const infos: FitInfo[][] = [];
-  plan.forEach((item, i) => {
-    const base = baseOf(chords[item.chordIdx].rootPc);
-    const row: Cell[] = [];
-    const irow: FitInfo[] = [];
-    ks.forEach(k => {
-      const info = fitInfo(item.frag, base, k, range);
-      irow.push(info);
-      const own = info.viol * 40 + Math.abs(info.mean - centre) * 0.12;
-      if (i === 0) {
-        row.push({ cost: own, from: -1 });
-        return;
-      }
+  const n = plan.length;
+  if (vitCost.length < n * K_COUNT) { vitCost = new Float64Array(n * K_COUNT); vitFrom = new Int8Array(n * K_COUNT); }
+  let prevLast = 0;
+  let prevHasLast = false;
+  for (let i = 0; i < n; i++) {
+    const item = plan[i];
+    const rootPc = chords[item.chordIdx].rootPc;
+    const base = baseOf(rootPc);
+    const fp = fragPitch(item.frag);
+    const hasPitch = fp.cnt > 0;
+    // join(k, pk) depends only on k - pk: first - prev.last = d0 + 12 (k - pk)
+    if (i > 0 && hasPitch && prevHasLast) {
+      const d0 = base + fp.first - prevLast;
+      for (let dk = -(K_COUNT - 1); dk < K_COUNT; dk++) joinPen[dk + K_COUNT - 1] = leapPenalty(d0 + 12 * dk);
+    }
+    for (let k = 0; k < K_COUNT; k++) {
+      const viol = violOf(memo, item.frag, rootPc, K_MIN + k, range);
+      const mean = hasPitch ? (fp.cnt * (base + 12 * (K_MIN + k)) + fp.sum) / fp.cnt : (range[0] + range[1]) / 2;
+      const own = viol * 40 + Math.abs(mean - centre) * 0.12;
+      if (i === 0) { vitCost[k] = own; vitFrom[k] = -1; continue; }
       let best = Infinity;
       let from = 0;
-      ks.forEach((_, pk) => {
-        const prev = infos[i - 1][pk];
-        const join = prev.last != null && info.first != null ? leapPenalty(info.first - prev.last) : 0;
-        const c = table[i - 1][pk].cost + join;
-        if (c < best) {
-          best = c;
-          from = pk;
-        }
-      });
-      row.push({ cost: best + own, from });
-    });
-    table.push(row);
-    infos.push(irow);
-  });
+      const useJoin = hasPitch && prevHasLast;
+      for (let pk = 0; pk < K_COUNT; pk++) {
+        const c = vitCost[(i - 1) * K_COUNT + pk] + (useJoin ? joinPen[k - pk + K_COUNT - 1] : 0);
+        if (c < best) { best = c; from = pk; }
+      }
+      vitCost[i * K_COUNT + k] = best + own;
+      vitFrom[i * K_COUNT + k] = from;
+    }
+    prevHasLast = hasPitch;
+    prevLast = hasPitch ? base + fp.last : 0; // at octave 0; octave k adds 12 k (folded into dk above)
+  }
   let bi = 0;
-  const lastRow = table[table.length - 1];
-  lastRow.forEach((c, i) => {
-    if (c.cost < lastRow[bi].cost) bi = i;
-  });
-  const out: number[] = new Array(plan.length);
-  for (let i = plan.length - 1; i >= 0; i--) {
-    out[i] = ks[bi];
-    bi = table[i][bi].from;
+  const lastRow = (n - 1) * K_COUNT;
+  for (let k = 1; k < K_COUNT; k++) if (vitCost[lastRow + k] < vitCost[lastRow + bi]) bi = k;
+  const out: number[] = new Array(n);
+  for (let i = n - 1; i >= 0; i--) {
+    out[i] = K_MIN + bi;
+    bi = vitFrom[i * K_COUNT + bi];
   }
   return out;
 }
@@ -489,13 +692,14 @@ function lickCost(events: Ev[], fragStarts: number[], range: [number, number], f
   let sum = 0;
   let cnt = 0;
   let prev: number | null = null;
-  const starts = new Set(fragStarts);
+  let fs = 0; // fragStarts is ascending
   events.forEach((e, i) => {
+    while (fs < fragStarts.length && fragStarts[fs] < i) fs++;
     if (e.midi == null) return;
     sum += e.midi;
     cnt++;
     cost += Math.max(0, range[0] - e.midi, e.midi - range[1]) * 40;
-    if (prev != null && starts.has(i)) cost += leapPenalty(e.midi - prev);
+    if (prev != null && fs < fragStarts.length && fragStarts[fs] === i) cost += leapPenalty(e.midi - prev);
     prev = e.midi;
   });
   if (cnt) cost += Math.abs(sum / cnt - centre) * 0.12;
@@ -538,38 +742,73 @@ function closingPenalty(q: ChordQualityId, rel: number, tier: Tier): number {
  * long stepwise 16th run in the last bar.
  */
 function preference(events: Ev[], chords: LickChord[], comfort: [number, number], lydian: boolean[], tier: Tier): number {
+  const nC = chords.length;
+  const nE = events.length;
   let pen = 0;
-  chords.forEach((ch, ci) => {
-    const e = events.find(x => x.start <= ch.start && x.start + evDur(x) > ch.start);
-    if (!e || e.midi == null) return;
-    pen += landingPenalty(ch.quality, mod12(e.midi - ch.rootPc), ci === chords.length - 1);
-  });
-  const closing = [...events].reverse().find(e => e.midi != null);
-  if (closing) { const lc = chords[chords.length - 1]; pen += closingPenalty(lc.quality, mod12((closing.midi as number) - lc.rootPc), tier); }
+  // Events are sorted by start, so the event sounding at each chord start and the chord of each event are found with moving pointers.
+  if (durScratch.length < nE) durScratch = new Int32Array(nE * 2);
+  const durs = durScratch;
+  for (let i = 0; i < nE; i++) {
+    const pcs = events[i].pieces;
+    let d = 0;
+    for (let j = 0; j < pcs.length; j++) d += pcs[j];
+    durs[i] = d;
+  }
+  let ei = 0;
+  for (let ci = 0; ci < nC; ci++) {
+    const ch = chords[ci];
+    while (ei < nE && events[ei].start + durs[ei] <= ch.start) ei++;
+    const e = ei < nE && events[ei].start <= ch.start ? events[ei] : undefined;
+    if (!e || e.midi == null) continue;
+    pen += landingPenalty(ch.quality, mod12(e.midi - ch.rootPc), ci === nC - 1);
+  }
+  let closing: Ev | undefined;
+  for (let i = nE - 1; i >= 0; i--) if (events[i].midi != null) { closing = events[i]; break; }
+  if (closing) { const lc = chords[nC - 1]; pen += closingPenalty(lc.quality, mod12((closing.midi as number) - lc.rootPc), tier); }
   let out = 0;
-  const altSeen = chords.map(() => false);
+  if (flagScratch.length < nC * 3) flagScratch = new Int32Array(nC * 3 + 16);
+  const flags = flagScratch;
+  flags.fill(0, 0, nC * 3);
+  // per chord: flags[3 ci] altered tone seen (anticipation-adjusted chord); flags[3 ci + 1] count of altered tones;
+  // flags[3 ci + 2] bit 1 = one held a quarter on a beat, bit 2 = m7b5 states its b5
   let prevMidi: number | null = null;
   let runLen = 0;
   let runLo = 0;
   let runHi = 0;
   let sixRun = 0;
-  const endTick = events.length ? events[events.length - 1].start + evDur(events[events.length - 1]) : 0;
-  for (const e of events) {
+  const endTick = nE ? events[nE - 1].start + durs[nE - 1] : 0;
+  let cp = 0; // chordIndexAt(chords, e.start)
+  let heads = 0;
+  let sixteenths = 0;
+  for (let i = 0; i < nE; i++) {
+    const e = events[i];
     if (e.midi == null) { runLen = 0; sixRun = 0; continue; }
+    const dur = durs[i];
+    heads++;
+    if (e.pieces[0] <= TICKS_PER_16TH && e.pieces.length === 1) sixteenths++;
     out += Math.max(0, comfort[0] - e.midi, e.midi - comfort[1]);
     if (prevMidi != null && Math.abs(e.midi - prevMidi) >= 10) pen += 14; // a leap of a minor 7th or more
     // an anticipation head (attacked within a beat before a change and tied over it) is judged on the arrival chord
-    let ci = chordIndexAt(chords, e.start);
+    while (cp + 1 < nC && e.start >= chords[cp + 1].start) cp++;
+    let ci = cp;
     const next = chords[ci + 1];
-    if (next && e.start + evDur(e) > next.start && next.start - e.start < TPB) ci++;
+    if (next && e.start + dur > next.start && next.start - e.start < TPB) ci++;
     const ch = chords[ci];
     const rel = mod12(e.midi - ch.rootPc);
-    const stressed = e.start % TPB === 0 || evDur(e) >= TPB;
-    if (e.start % TPB === 0 && evDur(e) >= TPB && !inScale(e.midi, ch.rootPc, ch.quality)) pen += 1.5;
+    const stressed = e.start % TPB === 0 || dur >= TPB;
+    if (e.start % TPB === 0 && dur >= TPB && !inScale(e.midi, ch.rootPc, ch.quality)) pen += 1.5;
     if (stressed && rel === 5 && (ch.quality === 'maj7' || (ch.quality === 'dom7' && lydian[ci]))) pen += 10; // avoid note
     if (rel === 5 && ch.quality === 'dom7' && lydian[ci]) pen += 4; // natural 11 on a Lydian dominant, stressed or not
     if ((rel === 1 || rel === 3 || rel === 8) && ch.quality === 'dom7' && lydian[ci]) pen += 3; // the altered sound is not Lydian dominant
-    if (ch.quality === 'dom7alt' && (rel === 1 || rel === 3 || rel === 8)) altSeen[ci] = true;
+    if (ch.quality === 'dom7alt' && (rel === 1 || rel === 3 || rel === 8)) flags[3 * ci] = 1;
+    // altered-tone count and m7b5's b5 judge each event on the chord it starts in (not the arrival chord)
+    const own = chords[cp];
+    const orel = mod12(e.midi - own.rootPc);
+    if (own.quality === 'dom7alt' && (orel === 1 || orel === 3 || orel === 8)) {
+      flags[3 * cp + 1]++;
+      if (e.start % TPB === 0 && dur >= TPB) flags[3 * cp + 2] |= 1;
+    }
+    if (own.quality === 'm7b5' && orel === 6) flags[3 * cp + 2] |= 2;
     // arpeggio noodling: more than six chord-tone attacks in a row inside an octave
     if (CHORDS[ch.quality].tones.some(t => mod12(t) === rel)) {
       if (runLen === 0) { runLo = e.midi; runHi = e.midi; }
@@ -579,36 +818,27 @@ function preference(events: Ev[], chords: LickChord[], comfort: [number, number]
       if (runLen > 6 && tier >= 2) pen += (runLen === 7 ? 4 : 2) * (tier === 2 ? 0.6 : 1);
     } else runLen = 0;
     // a stepwise 16th run in the last bar longer than four notes
-    if (evDur(e) <= TICKS_PER_16TH && e.start >= endTick - TPBAR && prevMidi != null && Math.abs(e.midi - prevMidi) <= 2 && sixRun > 0) {
+    if (dur <= TICKS_PER_16TH && e.start >= endTick - TPBAR && prevMidi != null && Math.abs(e.midi - prevMidi) <= 2 && sixRun > 0) {
       sixRun++;
       if (sixRun > 4) pen += 3;
-    } else sixRun = evDur(e) <= TICKS_PER_16TH ? 1 : 0;
+    } else sixRun = dur <= TICKS_PER_16TH ? 1 : 0;
     prevMidi = e.midi;
   }
   // Expert is reached by language, not by speed alone: the share of 16th-note attacks is capped (a soft cap at the finished lick)
-  const heads = events.filter(e => e.midi != null);
-  if (heads.length) {
-    const share = heads.filter(e => e.pieces[0] <= TICKS_PER_16TH && e.pieces.length === 1).length / heads.length;
-    pen += Math.max(0, share - SIXTEENTH_SOFT_CAP[tier]) * SIXTEENTH_OVER_COST;
-  }
-  chords.forEach((ch, ci) => { if (ch.quality === 'dom7alt' && !altSeen[ci]) pen += 6; }); // 7alt must sound altered
+  if (heads) pen += Math.max(0, sixteenths / heads - SIXTEENTH_SOFT_CAP[tier]) * SIXTEENTH_OVER_COST;
+  for (let ci = 0; ci < nC; ci++) if (chords[ci].quality === 'dom7alt' && !flags[3 * ci]) pen += 6; // 7alt must sound altered
   // ... and not just by one passing note: two altered tones, or one held a quarter on a beat
-  chords.forEach((ch, ci) => {
-    if (ch.quality !== 'dom7alt' || !altSeen[ci]) return;
-    let n = 0;
-    let held = false;
-    for (const e of events) {
-      if (e.midi == null || chordIndexAt(chords, e.start) !== ci || ![1, 3, 8].includes(mod12(e.midi - ch.rootPc))) continue;
-      n++;
-      if (e.start % TPB === 0 && evDur(e) >= TPB) held = true;
-    }
-    if (n < 2 && !held) pen += tier === 1 ? 0 : tier === 2 ? 1.5 : 2;
-  });
-  if (tier >= 2) chords.forEach((ch, ci) => { // m7b5 states its b5
-    if (ch.quality === 'm7b5' && !events.some(e => e.midi != null && chordIndexAt(chords, e.start) === ci && mod12(e.midi - ch.rootPc) === 6)) pen += 1.5;
-  });
+  for (let ci = 0; ci < nC; ci++) {
+    if (chords[ci].quality !== 'dom7alt' || !flags[3 * ci]) continue;
+    if (flags[3 * ci + 1] < 2 && !(flags[3 * ci + 2] & 1)) pen += tier === 1 ? 0 : tier === 2 ? 1.5 : 2;
+  }
+  if (tier >= 2) for (let ci = 0; ci < nC; ci++) { // m7b5 states its b5
+    if (chords[ci].quality === 'm7b5' && !(flags[3 * ci + 2] & 2)) pen += 1.5;
+  }
   return pen + Math.min(out, 40) * 0.12;
 }
+let durScratch = new Int32Array(256);
+let flagScratch = new Int32Array(64);
 
 const makeId = (progressionId: string, length: LengthId, keyPc: number, tier: Tier, seed: number) =>
   `${progressionId}-${length}-k${keyPc}-t${tier}-${seed}`;
@@ -645,6 +875,8 @@ export function generateLick(opts: GenerateOptions): Lick {
   const pools = makePools(opts.fragments ?? FRAGMENTS);
   const avoidSet = opts.avoid?.length ? new Set(opts.avoid) : undefined;
   const rng = new Rng(seed);
+  const avoidCache = new Map<PoolData, AvoidInfo>();
+  const fitMemo: FitMemo = new Map();
   // Lydian-dominant chords (tritone-sub bII7, backdoor bVII7): the natural 11 is an avoid note there
   const roles = chordRoles(def.id, def.slots);
   const lydian = roles.map(r => r === 'lyd');
@@ -656,10 +888,10 @@ export function generateLick(opts: GenerateOptions): Lick {
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const sharp = 1 + Math.min(round, 2) * 0.8;
     const roundScores: number[] = [];
-    const baseCache = new Map<string, Map<Fragment, number>>();
+    const roundCache: RoundCache = new Map();
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier, avoidSet, roles, baseCache);
-      const octaves = chooseOctaves(plan, chords, fitRange);
+      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier, avoidSet, roles, roundCache, avoidCache);
+      const octaves = chooseOctaves(plan, chords, fitRange, fitMemo);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range) + fixLeaps(events, opts.range);
       phraseEvents(rng, events, fragStarts, chords, opts.range, { level, lydian });
@@ -680,7 +912,10 @@ export function generateLick(opts: GenerateOptions): Lick {
     if (best && best.dist - best.pref <= tol) break;
     if (target !== undefined) {
       const mid = [...roundScores].sort((a, b) => a - b)[roundScores.length >> 1];
-      if (mid > target + tol) level = Math.max(1, level - 0.4);
+      if (mid > target + tol) {
+        if (level <= 1 && round >= FLOOR_AFTER_ROUND) break;
+        level = Math.max(1, level - 0.4);
+      }
       else if (mid < target - tol) level = Math.min(4, level + 0.4);
     }
   }

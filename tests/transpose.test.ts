@@ -5,6 +5,7 @@ import { posToScore } from '../src/difficulty/score';
 import { lickFingerings } from '../src/render/tab';
 import { PROGRESSIONS, LENGTHS } from '../src/theory/progressions';
 import type { Lick, LengthId } from '../src/types';
+import { FULL_SWEEP } from './_samples';
 
 const pitched = (l: Lick) => l.notes.filter(n => n.midi != null).map(n => n.midi as number);
 const maxLeap = (l: Lick) => pitched(l).reduce((m, p, i, a) => (i ? Math.max(m, Math.abs(p - a[i - 1])) : m), 0);
@@ -30,12 +31,18 @@ describe('transposeLick range folding', () => {
   it('property sweep: every instrument, every key, in range; tab never fret-less', () => {
     const gens = ['alto', 'tenor', 'trumpet', 'guitar', 'bass', 'trombone', 'flute'].map(getInstrument);
     let n = 0, after = 0, folded = 0, tabNotes = 0, noFret = 0, worstExtra = 0;
-    for (const p of PROGRESSIONS) for (const len of Object.keys(LENGTHS) as LengthId[]) for (const seed of [1, 2, 3]) for (const pos of [10, 40, 70, 95]) {
+    // Default: 4 of the 12 (seed, slider position) combinations (every position once) and 8 of the 12 target keys per lick (rotating, so every
+    // key is covered for every instrument across the licks): ~7,200 transposes. SWEEP=full: all 12 combinations x all 12 keys (32,400).
+    const combos = FULL_SWEEP
+      ? [1, 2, 3].flatMap(seed => [10, 40, 70, 95].map(pos => ({ seed, pos })))
+      : [{ seed: 1, pos: 10 }, { seed: 2, pos: 40 }, { seed: 3, pos: 70 }, { seed: 1, pos: 95 }];
+    for (const p of PROGRESSIONS) for (const len of Object.keys(LENGTHS) as LengthId[]) for (const { seed, pos } of combos) {
       const g = gens[(seed + pos + n) % gens.length];
       const lick = generateLick({ progressionId: p.id, length: len, keyPc: (seed * 5) % 12, tier: 3, targetScore: posToScore(pos), range: concertRange(g), seed });
       for (const inst of INSTRUMENTS) {
         const [lo, hi] = concertRange(inst);
         for (let key = 0; key < 12; key++) {
+          if (!FULL_SWEEP && (key + INSTRUMENTS.indexOf(inst) + seed + pos) % 3 === 0) continue;
           const t = transposeLick(lick, key, [lo, hi]);
           n++;
           expect(shape(t)).toEqual(shape(lick)); // rhythm, ties and key-relative pitch classes unchanged

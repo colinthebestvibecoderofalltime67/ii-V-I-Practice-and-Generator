@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { summarize } from '../src/analysis/musicality';
-import { posToScore, scoreLick, tierForScore } from '../src/difficulty/score';
+import { posToScore, scoreLick } from '../src/difficulty/score';
 import { FRAGMENTS } from '../src/fragments';
 import { generateLick, transposeLick } from '../src/generator';
 import { type Ev, fixJoins, fixLeaps, isEndingTone, phraseEvents } from '../src/generator/connect';
@@ -10,6 +10,7 @@ import { judgedChord } from '../src/theory/rhythm';
 import { LENGTHS, PROGRESSIONS, expandProgression, getProgression } from '../src/theory/progressions';
 import type { LengthId, Lick, LickChord, LickNote, Tier } from '../src/types';
 import { TIER_NAMES } from '../src/types';
+import { sessionSample } from './_samples';
 
 const LENGTH_IDS = Object.keys(LENGTHS) as LengthId[];
 
@@ -131,27 +132,15 @@ describe('scorer: anticipation heads belong to the arrival chord', () => {
 });
 
 describe('sequences and 16th share', () => {
-  const sample = (() => {
-    const out: Lick[] = [];
-    const byTier: Record<Tier, Lick[]> = { 1: [], 2: [], 3: [], 4: [] };
-    const insts = ['alto', 'guitar'].map(getInstrument);
-    let seed = 1;
-    for (const p of PROGRESSIONS) for (const length of LENGTH_IDS) for (const pos of [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]) for (let s = 0; s < 6; s++) {
-      const inst = insts[s % 2];
-      const l = generateLick({ progressionId: p.id, length, keyPc: (seed * 5) % 12, tier: 1, targetScore: posToScore(pos), range: concertRange(inst), comfortRange: concertRangeForLevel(inst, tierForScore(posToScore(pos))), seed: seed++ });
-      out.push(l);
-      byTier[l.requestedTier].push(l);
-    }
-    return { all: out, byTier };
-  })();
+  const sampleOf = () => sessionSample({ avoid: false }); // built on first use, not at collection time
 
   it('at most one sequence cell per lick', () => {
     const tags = new Map(FRAGMENTS.map(f => [f.id, f.tags.includes('sequence')]));
-    for (const l of sample.all) expect(l.fragmentIds.filter(id => tags.get(id)).length, l.id).toBeLessThanOrEqual(1);
+    for (const l of sampleOf().all) expect(l.fragmentIds.filter(id => tags.get(id)).length, l.id).toBeLessThanOrEqual(1);
   }, 60_000);
 
   it('musicality targets (current library; Phase 2b)', () => {
-    const rows = ([1, 2, 3, 4] as Tier[]).map(t => [TIER_NAMES[t], summarize(sample.byTier[t])] as const);
+    const rows = ([1, 2, 3, 4] as Tier[]).map(t => [TIER_NAMES[t], summarize(sampleOf().byTier[t])] as const);
     const m = Object.fromEntries(rows);
     for (const [name, r] of rows) {
       expect(r.bigLeapShare, `${name} leap10`).toBeLessThanOrEqual(0.08);

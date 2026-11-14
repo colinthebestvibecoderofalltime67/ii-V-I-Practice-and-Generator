@@ -4,32 +4,12 @@
  * Sample: every progression x length x slider position (5..95 step 10) x seeds, on alto sax and guitar. Like the app,
  * each lick avoids the cells of the previous 8 licks (a practice session).
  */
-import { generateLick } from '../src/generator';
-import { posToScore, tierForScore } from '../src/difficulty/score';
-import { concertRange, concertRangeForLevel, getInstrument } from '../src/instruments';
-import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
 import { summarize, type MusicalitySummary } from '../src/analysis/musicality';
-import { TIER_NAMES, type LengthId, type Lick, type Tier } from '../src/types';
+import { sessionSample } from '../tests/_samples';
+import { TIER_NAMES, type Tier } from '../src/types';
 
-const SEEDS = Number(process.env.SEEDS ?? 6);
-const POSITIONS = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95];
-const INSTS = ['alto', 'guitar'].map(getInstrument);
-
-const all: Lick[] = [];
-const byTier: Record<Tier, Lick[]> = { 1: [], 2: [], 3: [], 4: [] };
-let seed = 1;
-for (const p of PROGRESSIONS) {
-  for (const length of Object.keys(LENGTHS) as LengthId[]) {
-    for (const pos of POSITIONS) {
-      for (let s = 0; s < SEEDS; s++) {
-        const inst = INSTS[s % INSTS.length];
-        const l = generateLick({ progressionId: p.id, length, keyPc: (seed * 5) % 12, tier: 1, targetScore: posToScore(pos), range: concertRange(inst), comfortRange: concertRangeForLevel(inst, tierForScore(posToScore(pos))), avoid: all.slice(-8).flatMap(r => r.fragmentIds), seed: seed++ });
-        all.push(l);
-        byTier[l.requestedTier].push(l);
-      }
-    }
-  }
-}
+// The same builder as the tests (tests/_samples.ts), so the report and the tests cannot drift apart.
+const { all, byTier } = sessionSample({ seeds: Number(process.env.SEEDS ?? 6) });
 
 const rows: [string, MusicalitySummary][] = [['All', summarize(all)], ...([1, 2, 3, 4] as Tier[]).map(t => [TIER_NAMES[t], summarize(byTier[t])] as [string, MusicalitySummary])];
 

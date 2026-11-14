@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { generateLick, transposeLick } from '../src/generator';
 import { type Ev, eventsToNotes, fixJoins } from '../src/generator/connect';
 import { concertRange, getInstrument } from '../src/instruments';
@@ -16,23 +16,25 @@ describe('triplets in generated licks', () => {
   const share: Record<Tier, { n: number; any: number; t16: number }> = {
     1: { n: 0, any: 0, t16: 0 }, 2: { n: 0, any: 0, t16: 0 }, 3: { n: 0, any: 0, t16: 0 }, 4: { n: 0, any: 0, t16: 0 },
   };
-  for (const tier of TIERS) {
-    for (let i = 0; i < 150; i++) {
-      const p = PROGRESSIONS[i % PROGRESSIONS.length];
-      const lick = generateLick({ progressionId: p.id, length: LENGTH_IDS[i % 3], keyPc: i % 12, tier, range, seed: 500 + i });
-      const { groups, errors } = findTupletGroups(lick.notes);
-      expect(errors, lick.id).toEqual([]);
-      for (const g of groups) expect(Math.floor(g.start / TPBAR), lick.id).toBe(Math.floor((g.end - 1) / TPBAR));
-      for (const n of lick.notes) if (isTupletDur(n.dur)) expect(n.tie).toBeFalsy();
-      const k = kindsOf(lick);
-      share[tier].n++;
-      if (k.size) share[tier].any++;
-      if (k.has('t16')) share[tier].t16++;
-      const f = lick.difficulty.features.find(x => x.id === 'triplets');
-      if (k.size) expect(f && f.points > 0, lick.id).toBe(true);
-      else expect(f, lick.id).toBeUndefined();
+  beforeAll(() => { // generated on first use, not at collection time
+    for (const tier of TIERS) {
+      for (let i = 0; i < 150; i++) {
+        const p = PROGRESSIONS[i % PROGRESSIONS.length];
+        const lick = generateLick({ progressionId: p.id, length: LENGTH_IDS[i % 3], keyPc: i % 12, tier, range, seed: 500 + i });
+        const { groups, errors } = findTupletGroups(lick.notes);
+        expect(errors, lick.id).toEqual([]);
+        for (const g of groups) expect(Math.floor(g.start / TPBAR), lick.id).toBe(Math.floor((g.end - 1) / TPBAR));
+        for (const n of lick.notes) if (isTupletDur(n.dur)) expect(n.tie).toBeFalsy();
+        const k = kindsOf(lick);
+        share[tier].n++;
+        if (k.size) share[tier].any++;
+        if (k.has('t16')) share[tier].t16++;
+        const f = lick.difficulty.features.find(x => x.id === 'triplets');
+        if (k.size) expect(f && f.points > 0, lick.id).toBe(true);
+        else expect(f, lick.id).toBeUndefined();
+      }
     }
-  }
+  }, 60_000);
   it('no triplets for Beginner; 16th-triplets only for Expert', () => {
     expect(share[1].any).toBe(0);
     expect(share[2].t16 + share[3].t16).toBe(0);

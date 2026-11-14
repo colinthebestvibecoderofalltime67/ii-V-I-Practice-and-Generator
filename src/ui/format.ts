@@ -17,6 +17,9 @@ export function writtenKeyLabel(lick: Lick, inst: Instrument): string {
   return keyLabel(mod12(lick.keyPc + inst.transpose), lick.mode);
 }
 
+/** Title key: the key the player reads (concert key for non-transposing instruments). */
+export const titleKeyLabel = (lick: Lick, inst: Instrument): string => writtenKeyLabel(lick, inst);
+
 export const isTransposing = (inst: Instrument): boolean => mod12(inst.transpose) !== 0;
 
 export const tierName = (t: Tier): string => TIER_NAMES[t];

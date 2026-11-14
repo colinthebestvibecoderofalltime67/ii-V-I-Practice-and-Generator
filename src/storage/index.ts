@@ -40,7 +40,7 @@ export const DEFAULT_SETTINGS: Settings = {
   length: 'standard',
   target: 37,
   instrumentId: 'alto',
-  key: 'random',
+  key: 0,
   bpm: 120,
   slow: false,
   piano: true,
@@ -52,7 +52,7 @@ export const DEFAULT_SETTINGS: Settings = {
   comp: 'rootless',
   leadVolume: 0.8,
   pianoVolume: 0.6,
-  countIn: false,
+  countIn: true,
   metronome: false,
   midiBacking: true,
   tabPosition: 'auto',
@@ -175,14 +175,21 @@ export class Store {
     }
   }
 
+  /** False when the most recent write was rejected (quota, blocked storage). */
+  lastWriteOk = true;
+
   private write(key: string, value: unknown): boolean {
+    let ok = false;
     try {
-      if (!this.backend) return false;
-      this.backend.setItem(key, JSON.stringify(value));
-      return true;
+      if (this.backend) {
+        this.backend.setItem(key, JSON.stringify(value));
+        ok = true;
+      }
     } catch {
-      return false;
+      ok = false;
     }
+    this.lastWriteOk = ok;
+    return ok;
   }
 
   private readEntries(key: string, limit: number): StoredEntry[] {
@@ -220,13 +227,14 @@ export class Store {
   /* favorites: newest first */
   loadFavorites(): StoredEntry[] { return this.readEntries(KEYS.favorites, FAVORITES_LIMIT); }
   addFavorite(lick: Lick, at = Date.now()): StoredEntry[] {
-    const list = [{ lick, at }, ...this.loadFavorites().filter(e => e.lick.id !== lick.id)].slice(0, FAVORITES_LIMIT);
-    this.write(KEYS.favorites, list);
-    return list;
+    const before = this.loadFavorites();
+    const list = [{ lick, at }, ...before.filter(e => e.lick.id !== lick.id)].slice(0, FAVORITES_LIMIT);
+    // Return what is actually stored: if the write fails the list is unchanged.
+    return this.write(KEYS.favorites, list) ? list : before;
   }
   removeFavorite(id: string): StoredEntry[] {
-    const list = this.loadFavorites().filter(e => e.lick.id !== id);
-    this.write(KEYS.favorites, list);
-    return list;
+    const before = this.loadFavorites();
+    const list = before.filter(e => e.lick.id !== id);
+    return this.write(KEYS.favorites, list) ? list : before;
   }
 }

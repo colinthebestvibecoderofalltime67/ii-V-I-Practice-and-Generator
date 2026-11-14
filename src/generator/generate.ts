@@ -127,10 +127,12 @@ function fragTripletKinds(f: Fragment): Set<TupletKind> {
   }
   return k;
 }
-function tripletFactor(f: Fragment, level: number): number {
+/** `tier` is the requested (target) tier: Beginner never gets triplets and 16th triplets need Expert, whatever the fractional level. */
+export function tripletFactor(f: Fragment, level: number, tier: Tier = Math.round(level) as Tier): number {
   const kinds = fragTripletKinds(f);
   if (!kinds.size) return 1;
-  if (kinds.has('t16') && level < 4) return 0;
+  if (tier === 1) return 0;
+  if (kinds.has('t16') && (level < 4 || tier < 4)) return 0;
   return lerpTable(TRIPLET_FACTOR_BY_LEVEL, level - 1);
 }
 const TRIPLET_FACTOR_BY_LEVEL = [TRIPLET_FACTOR[1], TRIPLET_FACTOR[2], TRIPLET_FACTOR[3], TRIPLET_FACTOR[4]];
@@ -178,7 +180,7 @@ function firstNoteOk(f: Fragment, q: ChordQualityId): boolean {
 }
 
 function buildPlan(
-  rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number,
+  rng: Rng, chords: LickChord[], slotBeats: number[], pools: Pools, level: number, sharp: number, tier: Tier,
 ): PlanItem[] {
   const plan: PlanItem[] = [];
   let beat = 0;
@@ -198,7 +200,7 @@ function buildPlan(
       const pool = pools.get(q, b as 2 | 4, ending);
       const frag = rng.weighted(pool, f => {
         let w = Math.pow(lerpTable(LEVEL_WEIGHT, Math.abs(f.level - level)), sharp);
-        w *= tripletFactor(f, level);
+        w *= tripletFactor(f, level, tier);
         if (f.id === prevId) w *= 0.15;
         if (pi === 0 && !firstNoteOk(f, q)) w *= 0.2;
         return w;
@@ -377,7 +379,7 @@ export function generateLick(opts: GenerateOptions): Lick {
     const sharp = 1 + round * 0.8;
     const roundScores: number[] = [];
     for (let c = 0; c < CANDIDATES_PER_ROUND; c++) {
-      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp);
+      const plan = buildPlan(rng, chords, slotBeats, pools, level, sharp, reqTier);
       const octaves = chooseOctaves(plan, chords, opts.range);
       const { events, fragStarts } = planToEvents(plan, chords, octaves);
       const fixes = fixJoins(events, chords, opts.range);
@@ -385,7 +387,8 @@ export function generateLick(opts: GenerateOptions): Lick {
       const cost = lickCost(events, fragStarts, opts.range, fixes);
       const score = scoreLick(notes, chords, def).score;
       roundScores.push(score);
-      const dist = target !== undefined ? Math.abs(score - target) : tierDistance(score, reqTier);
+      // With a target, staying inside the target's tier outranks closeness (a target on a boundary must not land across it).
+      const dist = target !== undefined ? tierDistance(score, reqTier) * 100 + Math.abs(score - target) : tierDistance(score, reqTier);
       if (!best || dist < best.dist || (dist === best.dist && cost < best.cost)) best = { notes, plan, cost, dist };
     }
     if (best && best.dist <= tol) break;

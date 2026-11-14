@@ -38,7 +38,7 @@ describe('storage', () => {
     mem.setItem(KEYS.settings, JSON.stringify({ bpm: 9999, key: 99, tier: 7, progressionId: 'nope', comp: 'x', loop: 'yes', swing: false }));
     const s = store.loadSettings();
     expect(s.bpm).toBe(320);
-    expect(s.key).toBe('random');
+    expect(s.key).toBe(DEFAULT_SETTINGS.key);
     expect(s.target).toBe(DEFAULT_SETTINGS.target);
     expect(s.progressionId).toBe(DEFAULT_SETTINGS.progressionId);
     expect(s.comp).toBe(DEFAULT_SETTINGS.comp);

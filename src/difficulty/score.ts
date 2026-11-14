@@ -52,6 +52,15 @@ export function tierForScore(score: number): Tier {
   return 4;
 }
 
+/** Whole-number score for display that never rounds across a tier threshold (14.6 shows as 14, still Intermediate). */
+export function displayScore(score: number): number {
+  const r = Math.round(score);
+  const t = tierForScore(score);
+  if (t < 4 && r >= TIER_THRESHOLDS[t - 1]) return TIER_THRESHOLDS[t - 1] - 1;
+  if (t > 1 && r < TIER_THRESHOLDS[t - 2]) return TIER_THRESHOLDS[t - 2];
+  return r;
+}
+
 /**
  * Practical maximum score: the 95th percentile of 360 Expert licks (all progressions, lengths,
  * four instruments, seeds 1..360) was 57.4, rounded up. The slider's top end maps here.

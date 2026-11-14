@@ -32,6 +32,17 @@ describe('storage', () => {
     expect(store.loadFavorites()).toEqual([]);
   });
 
+  it('drill settings: defaults for old saved settings, round-trip, and sanitizing', () => {
+    mem.setItem(KEYS.settings, JSON.stringify({ bpm: 150 }));
+    expect(store.loadSettings()).toMatchObject({ bpm: 150, drillOrder: 'off', drillRepeats: 1, drillTempoStep: 0, drillMaxBpm: 200 });
+    store.saveSettings({ ...DEFAULT_SETTINGS, drillOrder: 'fourths', drillRepeats: 3, drillTempoStep: 5, drillMaxBpm: 180 });
+    expect(store.loadSettings()).toMatchObject({ drillOrder: 'fourths', drillRepeats: 3, drillTempoStep: 5, drillMaxBpm: 180 });
+    mem.setItem(KEYS.settings, JSON.stringify({ drillOrder: 'spiral', drillRepeats: 99, drillTempoStep: -4, drillMaxBpm: 9999 }));
+    expect(store.loadSettings()).toMatchObject({ drillOrder: 'off', drillRepeats: 4, drillTempoStep: 0, drillMaxBpm: 320 });
+    mem.setItem(KEYS.settings, JSON.stringify({ drillOrder: 7, drillRepeats: 'x', drillMaxBpm: 1 }));
+    expect(store.loadSettings()).toMatchObject({ drillOrder: 'off', drillRepeats: 1, drillMaxBpm: 40 });
+  });
+
   it('round-trips settings and sanitizes bad values', () => {
     store.saveSettings({ ...DEFAULT_SETTINGS, bpm: 150, key: 3, target: 88, analyze: true });
     expect(store.loadSettings()).toMatchObject({ bpm: 150, key: 3, target: 88, analyze: true });

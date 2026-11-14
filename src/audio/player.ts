@@ -10,7 +10,44 @@ export interface PlayOptions {
   piano: boolean; comp: CompStyle; leadVolume: number; pianoVolume: number; timbre: Timbre;
 }
 /** onNote: `indices` = every note of the sounding tie chain (to highlight); `current` = the note that just started. */
-export interface PlayCallbacks { onNote?(indices: number[], current?: number): void; onStatus?(text: string): void; onEnd?(): void }
+/**
+ * Returned by `onPass` to shape the NEXT pass of a looping play. `lick` and `bpm` are sticky (they stay in effect for
+ * later passes until replaced); `silentLead` applies to that one pass only.
+ */
+export interface PassAction {
+  /** Play this lick from the next bar line on. */
+  lick?: Lick;
+  /** Tempo for the next pass (clamped to 40..320). */
+  bpm?: number;
+  /** Lead muted for this pass (no lead notes, no highlight); backing and metronome still play. */
+  silentLead?: boolean;
+  /** End playback after the current pass instead of starting another (onEnd fires as usual). */
+  stop?: boolean;
+}
+/** What a pass actually plays; reported to `onPassStart`. */
+export interface PassInfo { lick: Lick; bpm: number; silentLead: boolean }
+export interface PlayCallbacks {
+  onNote?(indices: number[], current?: number): void;
+  onStatus?(text: string): void;
+  onEnd?(): void;
+  /**
+   * Loop hook, called shortly before pass `passIndex` (>= 1) is due, i.e. ahead of the bar line, so nothing stops or
+   * restarts. Only consulted when `loop` is on. Return a PassAction to change the next pass. This fires BEFORE the
+   * pass begins: update visible state in `onPassStart`, which fires exactly at the bar line.
+   */
+  onPass?(passIndex: number): PassAction | void;
+  /** Fires at the start of every pass (index 0 included, after any count-in). */
+  onPassStart?(passIndex: number, info: PassInfo): void;
+}
+
+/** Pure: fold a PassAction into the sticky lick/bpm state. */
+export function applyPassAction(cur: { lick: Lick; bpm: number }, action: PassAction | void): { lick: Lick; bpm: number; silentLead: boolean } {
+  return {
+    lick: action?.lick ?? cur.lick,
+    bpm: Math.min(320, Math.max(40, action?.bpm ?? cur.bpm)),
+    silentLead: !!action?.silentLead,
+  };
+}
 
 interface Buses { lead: GainNode; piano: GainNode; met: GainNode }
 interface Queued { t: number; fn: () => void }
@@ -60,35 +97,37 @@ export class Player {
     this.buses = buses;
 
     const bpm = Math.min(320, Math.max(40, opts.bpm));
-    const spb = 60 / bpm;
     const t0 = ctx.currentTime + 0.15;
     let start = t0;
     if (opts.countIn) {
+      const spb0 = 60 / bpm;
       for (let i = 0; i < 4; i++) {
-        click(ctx, buses.met, t0 + i * spb, i === 0);
-        this.later(t0 + i * spb, () => cb.onStatus?.('Count-in: ' + (i + 1)));
+        click(ctx, buses.met, t0 + i * spb0, i === 0);
+        this.later(t0 + i * spb0, () => cb.onStatus?.('Count-in: ' + (i + 1)));
       }
-      start = t0 + 4 * spb;
+      start = t0 + 4 * spb0;
     }
 
-    const sounds = soundingNotes(lick);
-    const byFirst = new Map<number, number[]>();
-    for (const s of sounds) for (const i of s.indices) byFirst.set(i, s.indices);
-    const compEv = opts.piano ? compEvents(lick.chords, opts.comp) : [];
-    const bassEv = opts.piano ? bassEvents(lick.chords) : [];
-    const beats = lick.totalTicks / TPB;
-    const tl = makeTimeline(lick.notes, { swing: opts.swing, straight16: opts.straight16 });
-    const groups = findTupletGroups(lick.notes).groups;
-
-    const pass = (st: number): void => {
+    const pass = (st: number, passIndex: number, cur: Lick, curBpm: number, silent: boolean): void => {
       if (session !== this.session || !this.buses) return;
+      const spb = 60 / curBpm;
+      const sounds = soundingNotes(cur);
+      const byFirst = new Map<number, number[]>();
+      for (const s of sounds) for (const i of s.indices) byFirst.set(i, s.indices);
+      const compEv = opts.piano ? compEvents(cur.chords, opts.comp) : [];
+      const bassEv = opts.piano ? bassEvents(cur.chords) : [];
+      const beats = cur.totalTicks / TPB;
+      const tl = makeTimeline(cur.notes, { swing: opts.swing, straight16: opts.straight16 });
+      const groups = findTupletGroups(cur.notes).groups;
       const end = st + beats * spb;
-      this.later(st, () => cb.onStatus?.(`${bpm} BPM`));
-      lick.notes.forEach((n, i) => {
+      this.later(st, () => cb.onPassStart?.(passIndex, { lick: cur, bpm: curBpm, silentLead: silent }));
+      this.later(st, () => cb.onStatus?.(`${curBpm} BPM`));
+      if (silent) this.later(st, () => cb.onNote?.([]));
+      else cur.notes.forEach((n, i) => {
         const idx = n.midi == null ? [] : byFirst.get(i) ?? [i];
         this.later(st + tl(n.start) * spb, () => cb.onNote?.(idx, i));
       });
-      for (const s of sounds) {
+      if (!silent) for (const s of sounds) {
         const t = st + tl(s.start) * spb;
         const g = groups.find(x => s.start >= x.start && s.start < x.end);
         let art = s.dur === TICKS_PER_16TH ? 0.78 : s.dur <= 3 * TICKS_PER_16TH ? 0.9 : 0.97;
@@ -111,11 +150,15 @@ export class Player {
         const d = timelineSpan(tl, e.tick, e.dur) * spb * 0.92;
         e.midi.forEach(m => bass(ctx, buses.piano, m, t, d, 0.3));
       }
-      // schedule the next pass (or the end) shortly before this one finishes
+      // ask for / schedule the next pass (or the end) shortly before this one finishes
       this.later(end - 0.5 * spb - 0.15, () => {
         if (session !== this.session) return;
-        if (opts.loop) pass(end);
-        else this.later(end + 0.3, () => {
+        const action = opts.loop ? cb.onPass?.(passIndex + 1) : undefined;
+        if (session !== this.session) return; // the callback may have stopped playback
+        if (opts.loop && !action?.stop) {
+          const next = applyPassAction({ lick: cur, bpm: curBpm }, action);
+          pass(end, passIndex + 1, next.lick, next.bpm, next.silentLead);
+        } else this.later(end + 0.3, () => {
           if (session !== this.session) return;
           this.stop();
           cb.onNote?.([]);
@@ -123,7 +166,7 @@ export class Player {
         });
       });
     };
-    pass(start);
+    pass(start, 0, lick, bpm, false);
   }
 
   pause(): void {

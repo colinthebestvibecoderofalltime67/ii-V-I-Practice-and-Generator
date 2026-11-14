@@ -613,11 +613,16 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
         const pk = B.chordPiece[j];
         const nx = pk >= 0 ? B.notes[pk].getAbsoluteX() : st.getNoteStartX();
         ctx.fillText(chordLabel[ci], nx - 2, y0 + CHORD_BASE);
-        if (romans) {
+        const nextX = j + 1 < B.chordIdx.length
+          ? (B.chordPiece[j + 1] >= 0 ? B.notes[B.chordPiece[j + 1]].getAbsoluteX() : st.getNoteStartX()) - 2
+          : x + w;
+        const romanX = nx - 2 + labelW[ci] + 6;
+        // Drop the roman numeral when it would run into the next chord symbol (narrow phones).
+        if (romans && romanX + romanW![ci] + 4 <= nextX) {
           ctx.save();
           ctx.setFont(ROMAN_FONT, ROMAN_SIZE, 'normal');
           ctx.setFillStyle(print ? '#000' : '#6E6D67');
-          ctx.fillText(romans[ci], nx - 2 + labelW[ci] + 6, y0 + CHORD_BASE);
+          ctx.fillText(romans[ci], romanX, y0 + CHORD_BASE);
           ctx.restore();
           ctx.setFont(chordFamily, CHORD_SIZE, chordWeight);
         }

@@ -10,6 +10,8 @@ export interface LibraryHooks {
   onLoad(lick: Lick): void;
   onRemoveFavorite(id: string): void;
   onClearHistory(): void;
+  /** True when the selected instrument transposes; keys are then labelled "concert". */
+  isTransposing?(): boolean;
 }
 
 type Tab = 'history' | 'favorites';
@@ -105,10 +107,10 @@ export class Library {
       badge.dataset.tier = String(lick.difficulty.tier);
       badge.textContent = TIER_NAMES[lick.difficulty.tier];
       const rest = document.createElement('span');
-      rest.textContent = `${keyLabel(lick.keyPc, lick.mode)} · ${LENGTHS[lick.length].label.replace(/ \(.*\)/, '')} · ${relativeTime(at, now)}`;
+      rest.textContent = `${this.hooks.isTransposing?.() ? 'concert ' : ''}${keyLabel(lick.keyPc, lick.mode)} · ${LENGTHS[lick.length].label.replace(/ \(.*\)/, '')} · ${relativeTime(at, now)}`;
       l2.append(badge, rest);
       load.append(l1, l2);
-      load.setAttribute('aria-label', `Load ${progressionName(lick)} in ${keyLabel(lick.keyPc, lick.mode)}, ${TIER_NAMES[lick.difficulty.tier]}`);
+      load.setAttribute('aria-label', `Load ${progressionName(lick)} in ${this.hooks.isTransposing?.() ? 'concert ' : ''}${keyLabel(lick.keyPc, lick.mode)}, ${TIER_NAMES[lick.difficulty.tier]}`);
       li.appendChild(load);
       if (!hist) {
         const rm = document.createElement('button');

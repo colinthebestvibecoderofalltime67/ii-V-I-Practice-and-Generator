@@ -5,7 +5,17 @@ import { downloadBlob, fileName, isTransposing, keyLabel, progressionName, writt
 
 const RENDER_WIDTH = 720;
 /** Built-in PDF fonts lack the flat/sharp signs. */
-const plain = (s: string): string => s.replace(/♭/g, 'b').replace(/♯/g, '#');
+export const plain = (s: string): string => s.replace(/♭/g, 'b').replace(/♯/g, '#').replace(/♮/g, '').replace(/Δ/g, 'maj');
+
+/** Sanitise every SVG text node for the built-in fonts (WinAnsi has ø and °, not ♭ ♯). */
+export function sanitizeSvgText(svg: Element): void {
+  const walker = document.createTreeWalker(svg, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const t = n.nodeValue ?? '';
+    const c = plain(t);
+    if (c !== t) n.nodeValue = c;
+  }
+}
 
 /** Render the lick to an A4 portrait PDF and trigger a download. `opts.showTab` defaults to "the instrument has a tab". jsPDF and svg2pdf load on demand. */
 export async function exportPdf(
@@ -26,6 +36,7 @@ export async function exportPdf(
       const m = /^([\d.]+)pt$/.exec(el.getAttribute('font-size') ?? '');
       if (m) el.setAttribute('font-size', String(+(parseFloat(m[1]) * (4 / 3)).toFixed(2)));
     }
+    sanitizeSvgText(svg);
     const vb = svg.viewBox.baseVal;
     const w = vb && vb.width ? vb.width : parseFloat(svg.getAttribute('width') || '') || RENDER_WIDTH;
     const h = vb && vb.height ? vb.height : parseFloat(svg.getAttribute('height') || '') || 300;

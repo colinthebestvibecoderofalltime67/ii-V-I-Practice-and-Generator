@@ -325,13 +325,16 @@ describe('advanced vocabulary (levels 3-4)', () => {
     expect(bh.some(f => f.qualities.includes('m6'))).toBe(true);
   });
 
-  it('superimposition: the tritone-sub ii-V (Abm7-Db7) over 7alt is spelled out', () => {
-    const f = adv.find(x => x.qualities.includes('dom7alt') && x.tags.includes('chromatic') && x.tags.includes('arpeggio'))!;
+  it('superimposition: Bbm7-Eb7 over G7alt (b3 b5 b7 b9 then b13 R #9 b5) and a Db7 arpeggio, all altered colours', () => {
+    const f = adv.find(x => x.id === 'dom7alt-adv-09')!;
     const r = rel(f).map(mod12);
-    expect(r.slice(0, 4)).toEqual([1, 4, 8, 11]); // Abm7 over G
-    expect(r.slice(4, 8)).toEqual(expect.arrayContaining([6, 10, 1, 4])); // Db7 over G
+    expect(r.slice(0, 4)).toEqual([3, 6, 10, 1]); // Bbm7 over G
+    expect(r.slice(4, 8)).toEqual([8, 0, 3, 6]); // Eb7 over G
+    const db7 = adv.find(x => x.id === 'dom7alt-adv-07')!;
+    expect(rel(db7).slice(0, 4).map(mod12)).toEqual([6, 10, 1, 4]); // Db7 over G
+    // no major 7th (natural B over C7alt) anywhere in the altered superimpositions
+    for (const g of adv.filter(x => x.qualities.includes('dom7alt'))) expect(rel(g).some(x => mod12(x) === 11), g.id).toBe(false);
   });
-
   it('outside-in: lines shifted up a half step and slipped back inside', () => {
     const oi = adv.filter(f => f.tags.includes('enclosure') && f.tags.includes('chromatic'));
     expect(oi.length).toBeGreaterThanOrEqual(5);
@@ -366,4 +369,121 @@ describe('vocabulary breadth keeps cells from dominating', () => {
       expect(m.topCellShare, `tier ${t} top cell ${m.topCell}`).toBeLessThanOrEqual(0.06); // 180-lick tier sample: 5% is 9 licks, so allow one lick of noise
     }
   }, 60_000);
+});
+
+/* ---------------------------------- Phase 2b cell quality ---------------------------------- */
+
+const pitchedRels = (f: Fragment) => f.notes.filter(n => n.rel !== null).map(n => n.rel as number);
+const intervalsOf = (f: Fragment) => { const p = pitchedRels(f); return p.slice(1).map((v, i) => v - p[i]); };
+
+describe('cells read as lines, not exercises', () => {
+  it('no interval inside a cell (across rests too) is a minor 7th or more', () => {
+    for (const f of FRAGMENTS) expect(Math.max(0, ...intervalsOf(f).map(Math.abs)), f.id).toBeLessThanOrEqual(9);
+  });
+
+  it('no cell states the same four-interval pattern twice (2-3 interval motifs may repeat)', () => {
+    for (const f of FRAGMENTS) {
+      const iv = intervalsOf(f);
+      const seen = new Set<string>();
+      for (let i = 0; i + 4 <= iv.length; i++) {
+        const k = iv.slice(i, i + 4).join(',');
+        expect(seen.has(k), `${f.id} repeats the interval pattern ${k}`).toBe(false);
+        seen.add(k);
+      }
+    }
+  });
+
+  it('vocabulary cells never repeat the same three consecutive pitches (one broken chord stated twice)', () => {
+    for (const f of VOCAB_FRAGMENTS) {
+      const p = pitchedRels(f);
+      const seen = new Set<string>();
+      for (let i = 0; i + 3 <= p.length; i++) {
+        const k = p.slice(i, i + 3).join(',');
+        expect(seen.has(k), `${f.id} repeats ${k}`).toBe(false);
+        seen.add(k);
+      }
+    }
+  });
+
+  it('vocabulary has no long unbroken 16th-note runs', () => {
+    for (const f of VOCAB_FRAGMENTS) expect(f.beats === 4 && pitchedRels(f).length >= 14, f.id).toBe(false);
+  });
+
+  it('dotted-8th + 16th beats are rare (at most 1% of cells)', () => {
+    const dotted = FRAGMENTS.filter(f => attacks(f).some(({ n, t }, i, arr) => n.dur === 9 && t % TPB === 0 && arr[i + 1]?.n.dur === 3));
+    expect(dotted.length / FRAGMENTS.length).toBeLessThanOrEqual(0.01);
+  });
+
+  it('prototype cells with a minor-7th leap are dropped on load', () => {
+    expect(FRAGMENTS.some(f => f.id === 'm7-proto-49')).toBe(false);
+    expect(PROTOTYPE_FRAGMENTS.some(f => f.id === 'm7-proto-49')).toBe(true);
+  });
+});
+
+describe('the 4th over maj7', () => {
+  it('appears only as an off-beat, short passing note between the 3rd and 5th', () => {
+    for (const f of FRAGMENTS.filter(x => x.qualities.includes('maj7'))) {
+      const s = attacks(f);
+      s.forEach(({ n, t }, i) => {
+        if (n.rel === null || mod12(n.rel) !== 5) return;
+        expect(t % TPB, `${f.id} 4th on a beat`).not.toBe(0);
+        expect(n.dur, `${f.id} 4th held`).toBeLessThan(TPB);
+        const prev = s.slice(0, i).reverse().find(x => x.n.rel !== null);
+        const next = s.slice(i + 1).find(x => x.n.rel !== null);
+        expect(prev && next, `${f.id} 4th is the first or last note`).toBeTruthy();
+        const pair = [mod12(prev!.n.rel as number), mod12(next!.n.rel as number)];
+        expect(pair.includes(4) && pair.includes(7), `${f.id} 4th between ${pair}`).toBe(true);
+      });
+    }
+  });
+});
+
+describe('wrong-colour advanced cells are gone', () => {
+  const adv = (id: string) => ADVANCED_FRAGMENTS.find(f => f.id === id)!;
+  const pcs = (f: Fragment) => new Set(pitchedRels(f).map(mod12));
+  it('no major 7th (natural B over C7) in the dominant outside-in and superimposition cells', () => {
+    for (const id of ['dom7-adv-09', 'dom7-adv-10', 'dom7alt-adv-07', 'dom7alt-adv-08']) expect(pcs(adv(id)).has(11), id).toBe(false);
+  });
+  it('the m7 outside-in cell does not use the major 7th (a minor-tonic sound over the ii)', () => {
+    expect(pcs(adv('m7-adv-07')).has(11)).toBe(false);
+  });
+  it('the maj7 triad-pair cell is the I and II (lydian) triads, not an Am7 and G arpeggio pair', () => {
+    expect([...pcs(adv('maj7-adv-11'))].sort((x, y) => x - y)).toEqual([0, 2, 4, 6, 7, 9]);
+  });
+});
+
+describe('altered and lydian-dominant colour at low levels', () => {
+  const ALT_COLOUR = [1, 3, 8];
+  const alt = FRAGMENTS.filter(f => f.qualities.includes('dom7alt'));
+  const coloured = (f: Fragment) => f.notes.some(n => n.rel !== null && ALT_COLOUR.includes(mod12(n.rel)));
+
+  it('Level 1 and 2 7alt pools are mostly coloured by a b9, #9 or b13', () => {
+    for (const lv of [1, 2]) for (const beats of [2, 4] as const) {
+      const pool = alt.filter(f => f.level === lv && f.beats === beats);
+      const plain = pool.filter(f => !coloured(f));
+      expect(pool.length, `L${lv} ${beats}b`).toBeGreaterThanOrEqual(lv === 1 ? 20 : 14);
+      expect(plain.length / pool.length, `L${lv} ${beats}b plain share`).toBeLessThanOrEqual(lv === 1 ? 0.45 : 0.05);
+    }
+  });
+
+  it('the guide-tone alteration cells are sparse and linger on the altered note', () => {
+    const gt = alt.filter(f => f.id.startsWith('dom7alt-gt-'));
+    expect(gt.length).toBeGreaterThanOrEqual(40);
+    for (const f of gt) {
+      expect(pitchedRels(f).length, f.id).toBeLessThanOrEqual(f.beats === 2 ? 4 : 7);
+      expect(f.notes.some(n => n.rel !== null && ALT_COLOUR.includes(mod12(n.rel)) && n.dur >= 2 * 3), f.id).toBe(true);
+    }
+  });
+
+  it('plain dominants have Lydian-dominant (#11, no natural 11) cells and enough cells without a stressed natural 11 at every level', () => {
+    const dom = FRAGMENTS.filter(f => f.qualities.includes('dom7'));
+    const stressed11 = (f: Fragment) => attacks(f).some(({ n, t }) => n.rel !== null && mod12(n.rel) === 5 && (t % TPB === 0 || n.dur >= TPB));
+    const lyd = dom.filter(f => f.notes.some(n => n.rel !== null && mod12(n.rel) === 6) && !f.notes.some(n => n.rel !== null && mod12(n.rel) === 5) && !f.qualities.includes('dom7alt'));
+    expect(lyd.length).toBeGreaterThanOrEqual(15);
+    for (const beats of [2, 4] as const) expect(lyd.filter(f => f.beats === beats).length).toBeGreaterThanOrEqual(5);
+    for (const lv of [1, 2, 3, 4]) expect(dom.filter(f => f.level === lv && !stressed11(f)).length, `L${lv}`).toBeGreaterThanOrEqual(20);
+    for (const f of FRAGMENTS.filter(x => x.id.startsWith('dom7-lyd-'))) {
+      attacks(f).forEach(({ n, t }) => { if (n.rel !== null && mod12(n.rel) === 6) expect(t % TPB, f.id).not.toBe(0); });
+    }
+  });
 });

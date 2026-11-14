@@ -6,6 +6,7 @@ import { ORIGINAL_FRAGMENTS } from './lib/original';
 import { TRIPLET_FRAGMENTS } from './lib/triplets';
 import { VOCAB_FRAGMENTS } from './lib/vocab';
 import { ADVANCED_FRAGMENTS } from './lib/advanced';
+import { PHASE2B_FRAGMENTS } from './lib/phase2b';
 import { parseNotes } from './lib/notation';
 
 /**
@@ -51,6 +52,12 @@ export const PROTOTYPE_OVERRIDES: Record<string, { qualities?: ChordQualityId[];
   'dom7-proto-54h2': { notes: '13:2 12:2 10:2 8:2' },
 };
 
+/**
+ * Mined prototype cells that leap a minor 7th or more inside the cell (an arpeggio restarted an octave up). They are
+ * dropped on load; the generated lib/prototype.ts is never edited by hand.
+ */
+export const PROTOTYPE_DROP = new Set(['m7-proto-49', 'm7-proto-49h2', 'dom7-proto-49', 'dom7-proto-49h2']);
+
 function applyOverride(f: Fragment): Fragment {
   const o = PROTOTYPE_OVERRIDES[f.id];
   if (!o) return f;
@@ -58,10 +65,10 @@ function applyOverride(f: Fragment): Fragment {
 }
 
 /** Libraries authored in 16th-note units (scaled x3 on load). Add new 16th-grid lib files here. */
-export const AUTHORED_FRAGMENTS: Fragment[] = [...SEED_FRAGMENTS, ...PROTOTYPE_FRAGMENTS, ...ORIGINAL_FRAGMENTS].map(applyOverride);
+export const AUTHORED_FRAGMENTS: Fragment[] = [...SEED_FRAGMENTS, ...PROTOTYPE_FRAGMENTS.filter(f => !PROTOTYPE_DROP.has(f.id)), ...ORIGINAL_FRAGMENTS].map(applyOverride);
 
-/** The Phase 2 vocabulary (lib/vocab.ts, lib/advanced.ts), also authored in 16ths. Kept apart from AUTHORED_FRAGMENTS, which some tests pin. */
-export const VOCABULARY_FRAGMENTS: Fragment[] = [...VOCAB_FRAGMENTS, ...ADVANCED_FRAGMENTS];
+/** The Phase 2 vocabulary (lib/vocab.ts, lib/advanced.ts, lib/phase2b.ts), also authored in 16ths. Kept apart from AUTHORED_FRAGMENTS, which some tests pin. */
+export const VOCABULARY_FRAGMENTS: Fragment[] = [...VOCAB_FRAGMENTS, ...ADVANCED_FRAGMENTS, ...PHASE2B_FRAGMENTS];
 
 /**
  * Every fragment the generator may use, on the engine tick grid. Libraries that contain triplet durations

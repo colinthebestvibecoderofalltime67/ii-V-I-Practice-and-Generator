@@ -8,7 +8,7 @@ import { loadPrototypeLicks } from '../scripts/legacy';
 import { SWING_RATIO, tickToBeats } from '../src/audio/timing';
 import { scoreLick } from '../src/difficulty/score';
 import { lickToMidi } from '../src/export/midi';
-import { AUTHORED_FRAGMENTS, AUTHORED_UNIT, FRAGMENTS, fromSixteenths } from '../src/fragments';
+import { AUTHORED_FRAGMENTS, AUTHORED_UNIT, FRAGMENTS, VOCABULARY_FRAGMENTS, fromSixteenths } from '../src/fragments';
 import { TRIPLET_FRAGMENTS } from '../src/fragments/lib/triplets';
 import { generateLick } from '../src/generator';
 import { concertRange, getInstrument } from '../src/instruments';
@@ -62,8 +62,8 @@ describe('splitDur / bar helpers', () => {
 
 describe('fragments are authored in 16ths and scaled on load', () => {
   it('scales every duration by 3 without mutating the authored data', () => {
-    // FRAGMENTS = scaled 16th-grid libraries + the triplet library (already on the engine grid, appended last)
-    expect(FRAGMENTS.length).toBe(AUTHORED_FRAGMENTS.length + TRIPLET_FRAGMENTS.length);
+    // FRAGMENTS = scaled 16th-grid libraries + the Phase 2 vocabulary (also 16ths) + the triplet library (already on the engine grid, appended last)
+    expect(FRAGMENTS.length).toBe(AUTHORED_FRAGMENTS.length + VOCABULARY_FRAGMENTS.length + TRIPLET_FRAGMENTS.length);
     FRAGMENTS.slice(0, AUTHORED_FRAGMENTS.length).forEach((f, i) => {
       const a = AUTHORED_FRAGMENTS[i];
       expect(f.id).toBe(a.id);

@@ -4,6 +4,9 @@ import { SEED_FRAGMENTS } from './lib/seed';
 import { PROTOTYPE_FRAGMENTS } from './lib/prototype';
 import { ORIGINAL_FRAGMENTS } from './lib/original';
 import { TRIPLET_FRAGMENTS } from './lib/triplets';
+import { VOCAB_FRAGMENTS } from './lib/vocab';
+import { ADVANCED_FRAGMENTS } from './lib/advanced';
+import { parseNotes } from './lib/notation';
 
 /**
  * Fragments in src/fragments/lib are AUTHORED in sixteenth-note units (1 = 16th, 2 = 8th, 4 = quarter,
@@ -17,15 +20,55 @@ export function fromSixteenths(f: Fragment): Fragment {
   return { ...f, notes: f.notes.map(n => ({ ...n, dur: n.dur * AUTHORED_UNIT })) };
 }
 
+/**
+ * Corrections to cells in the generated prototype/seed libraries. `npm run mine` rewrites lib/prototype.ts, so fixes
+ * live here and are applied on load (never edit prototype.ts by hand).
+ *
+ * The altered scale is R b9 #9 3 b5/#11 b13 b7 (rel 0 1 3 4 6 8 10). A cell offered over 7alt must not use the natural 5
+ * (rel 7) or natural 13 (rel 9): those belong to the plain V7 / half-whole diminished sound. So a cell that is only
+ * wrong over 7alt loses the `dom7alt` quality, and a cell that is 7alt-only gets the offending notes re-spelled.
+ * `notes` use the library's compact notation (16th units).
+ */
+const PLAIN_V7 = { qualities: ['dom7'] as ChordQualityId[] };
+export const PROTOTYPE_OVERRIDES: Record<string, { qualities?: ChordQualityId[]; notes?: string }> = {
+  'dom7-seed-3': PLAIN_V7,
+  'dom7-proto-28h1': PLAIN_V7,
+  'dom7-proto-33': PLAIN_V7,
+  'dom7-proto-33h1': PLAIN_V7,
+  'dom7-proto-34': PLAIN_V7,
+  'dom7-proto-34h1': PLAIN_V7,
+  'dom7-proto-34h2': PLAIN_V7,
+  'dom7-proto-36': PLAIN_V7,
+  'dom7-proto-36h1': PLAIN_V7,
+  'dom7-proto-42': PLAIN_V7,
+  'dom7-proto-46h2': PLAIN_V7,
+  'dom7-proto-45': { notes: '1:2 4:2 8:2 10:2 8:2 6:2 4:2 1:2' },
+  'dom7-proto-45h1': { notes: '1:2 4:2 8:2 10:2' },
+  'dom7-proto-46': { notes: '1:2 0:2 4:2 8:2 10:2 8:2 6:2 4:2' },
+  'dom7-proto-46h1': { notes: '1:2 0:2 4:2 8:2' },
+  'dom7-proto-50': { notes: '4:2 2:2 0:2 -2:2 1:2 4:2 8:2 10:2' },
+  'dom7-proto-54': { notes: '4:2 8:2 10:2 12:2 13:2 12:2 10:2 8:2' },
+  'dom7-proto-54h2': { notes: '13:2 12:2 10:2 8:2' },
+};
+
+function applyOverride(f: Fragment): Fragment {
+  const o = PROTOTYPE_OVERRIDES[f.id];
+  if (!o) return f;
+  return { ...f, ...(o.qualities ? { qualities: o.qualities } : {}), ...(o.notes ? { notes: parseNotes(o.notes, 1) } : {}) };
+}
+
 /** Libraries authored in 16th-note units (scaled x3 on load). Add new 16th-grid lib files here. */
-export const AUTHORED_FRAGMENTS: Fragment[] = [...SEED_FRAGMENTS, ...PROTOTYPE_FRAGMENTS, ...ORIGINAL_FRAGMENTS];
+export const AUTHORED_FRAGMENTS: Fragment[] = [...SEED_FRAGMENTS, ...PROTOTYPE_FRAGMENTS, ...ORIGINAL_FRAGMENTS].map(applyOverride);
+
+/** The Phase 2 vocabulary (lib/vocab.ts, lib/advanced.ts), also authored in 16ths. Kept apart from AUTHORED_FRAGMENTS, which some tests pin. */
+export const VOCABULARY_FRAGMENTS: Fragment[] = [...VOCAB_FRAGMENTS, ...ADVANCED_FRAGMENTS];
 
 /**
  * Every fragment the generator may use, on the engine tick grid. Libraries that contain triplet durations
  * (lib/triplets.ts) are already parsed to engine ticks and are appended AFTER the scaled 16th-grid libraries,
- * so FRAGMENTS.slice(0, AUTHORED_FRAGMENTS.length) is exactly the scaled authored set.
+ * so FRAGMENTS.slice(0, AUTHORED_FRAGMENTS.length) is exactly the scaled authored set (the vocabulary follows it).
  */
-export const FRAGMENTS: Fragment[] = [...AUTHORED_FRAGMENTS.map(fromSixteenths), ...TRIPLET_FRAGMENTS];
+export const FRAGMENTS: Fragment[] = [...AUTHORED_FRAGMENTS.map(fromSixteenths), ...VOCABULARY_FRAGMENTS.map(fromSixteenths), ...TRIPLET_FRAGMENTS];
 
 export const fragmentsFor = (q: ChordQualityId, beats?: 2 | 4): Fragment[] =>
   FRAGMENTS.filter(f => f.qualities.includes(q) && (beats === undefined || f.beats === beats));

@@ -1,4 +1,4 @@
-import type { ChordQualityId, ConceptId, Lick, LickChord, LickNote, Tier } from '../types';
+import type { ChordQualityId, ConceptId, LengthId, Lick, LickChord, LickNote, Tier } from '../types';
 import { TPB } from '../types';
 import { CHORDS, inScale } from './chords';
 import { mod12 } from './pitch';
@@ -22,16 +22,20 @@ import { judgedChord } from './rhythm';
  *                 right before it (the longest match wins), each 1 or 2 semitones from T (never T itself), with at least one
  *                 approach note above AND one below T, at least one a half step from T, and consecutive approach notes
  *                 moving (no repeats) by at most a major third. (Upper + lower neighbour, or the 3-note forms
- *                 "step, half step, half step".) Span = approach..T.
+ *                 "step, half step, half step".) Span = approach..T. A target that OPENS its chord on the root / 3rd / 7th may be
+ *                 approached by notes of the previous chord (a cross-barline enclosure); the approach notes still never open a
+ *                 chord and are never on a stronger beat (the bar downbeat) than the target.
  *  chromatic      A note NOT in the parent scale of its judged chord (at most a beat long) followed contiguously by an
  *                 attack a half step away that is a chord tone. Span = the approach note..the chord tone.
- *  guideTone      At a chord change, the attack sounding as the new chord starts (a held anticipation counts) is a guide tone of the
+ *  guideTone      (Guide tones are the 3rd and 7th; over an m6 only the b3, see guideRels.) At a chord change, the attack sounding as the new chord starts (a held anticipation counts) is a guide tone of the
  *                 new chord, and the attack right before it (contiguous, judged on the OLD chord) is a guide tone of the old
  *                 chord at most 2 semitones away (0 allowed when it is re-attacked, e.g. 3rd of ii to 7th of V). Span =
  *                 old..new; `chord` = the new chord. One per change at most.
  *  anticipation   A tie chain attacked less than a beat before a chord change and sounding across it (what judgedChord calls an
- *                 anticipation). Span = the chain; `chord` = the chord it arrives on. The Focus "anticipate the I" needs
- *                 one whose chord is the last chord.
+ *                 anticipation) that does not merely hold a chord tone of the chord it leaves (V root -> I 5th, V 3rd -> I 7th
+ *                 sound like a held note): it counts when it is the new chord's root or 3rd / b3, or not a tone of the old chord.
+ *                 Span = the chain; `chord` = the chord it arrives on. The Focus "anticipate the I" needs one whose chord is the
+ *                 last chord.
  *  triadPair      >= 6 contiguous attacks drawn only from two triads of the same quality (both major or both minor) whose roots
  *                 are a whole step apart (C/D, F/G, Ab/Gb ...: the classic pairs over maj7, m7, dom7 and 7alt), each triad
  *                 played >= 3 times with all 3 of its pitch classes, at least one switch from one triad to the other, and
@@ -45,9 +49,10 @@ import { judgedChord } from './rhythm';
  *                 own harmony: every pitch class belongs to m7(r) or 7(r+5), with >= 2 distinct pitch classes only in the
  *                 m7 and >= 2 only in the 7 (Gm7-C7 over C7, Bbm7-Eb7 over G7alt), or (b) outline the dominant a tritone
  *                 away (tritone substitution, over a dominant chord: >= 3 of its 4 tones, nothing else, >= 2 of them outside
- *                 the sounding chord's tones). Span = the window.
+ *                 the sounding chord's tones). The ii-V of the tritone substitute over a dominant (Abm7-Db7 over G7alt) needs only
+ *                 one pitch class outside the parent scale, since its tones are mostly altered-scale tones. Span = the window.
  *  sideSlip       3 to 6 contiguous attacks inside one chord that are a chord-tone figure shifted a half step up or down
- *                 (every note minus the shift is a chord tone, at least 2 are outside the chord's scale), followed by an attack
+ *                 (every note minus the shift is a chord tone, at least 2 are outside the chord's scale; the figure fills at least a beat), followed by an attack
  *                 that resolves by at most a whole step onto a chord tone within the same beat. Span = figure..resolution.
  */
 export type DeviceKind = 'enclosure' | 'chromatic' | 'guideTone' | 'anticipation' | 'triadPair' | 'sixthDim' | 'superimposition' | 'sideSlip';
@@ -129,6 +134,73 @@ export const CONCEPT_MIN_TIER: Record<ConceptId, Tier> = {
 
 export const conceptAllowed = (c: ConceptId, tier: Tier): boolean => tier >= CONCEPT_MIN_TIER[c];
 
+/**
+ * Where the generator cannot deliver a Focus concept reliably. Keys are "progressionId|length|tier"; the value is the span of slider
+ * positions (0..100, inclusive) inside that tier where fewer than 80% of the licks contained the device in a sweep of the generator
+ * (20 seeds per slider position, every 5th position, every progression and length: scripts/focus-sweep.ts). Typical causes: a
+ * Beginner tier with no room in the score for the device, or a short ii-V-i whose 2-beat altered chords cannot carry a 6-note triad
+ * pair or ii-V without leaving the tier at the bottom of Advanced. The UI says so (focusHint). Everything not listed is held to
+ * >= 80% by tests/focus-fx4.test.ts.
+ */
+export const CONCEPT_UNAVAILABLE: Readonly<Partial<Record<ConceptId, Readonly<Record<string, readonly [number, number]>>>>> = {
+  enclosures: {
+    'major-251-alt|short|1': [0, 20],
+    'minor-251|short|1': [0, 20],
+    'minor-251|standard|1': [0, 20],
+  },
+  chromaticApproach: {
+    'backdoor-251|short|1': [0, 20],
+    'backdoor-251|standard|1': [0, 20],
+    'chain-36251|short|1': [0, 20],
+    'major-251-alt|long|1': [0, 20],
+    'major-251-alt|short|1': [0, 20],
+    'major-251-alt|standard|1': [0, 20],
+    'major-251|short|1': [0, 20],
+    'minor-251|short|1': [0, 20],
+    'minor-251|standard|1': [0, 20],
+    'tritone-251|short|1': [0, 20],
+    'tritone-251|standard|1': [0, 20],
+    'turnaround|short|1': [0, 20],
+  },
+  anticipateI: {
+    'major-251-alt|long|1': [0, 20],
+    'major-251-alt|long|2': [25, 45],
+    'major-251-alt|long|3': [50, 70],
+    'major-251-alt|long|4': [75, 100],
+    'major-251-alt|short|1': [0, 20],
+    'major-251-alt|short|2': [25, 45],
+    'major-251-alt|short|3': [50, 70],
+    'major-251-alt|short|4': [75, 100],
+    'major-251-alt|standard|1': [0, 20],
+    'major-251-alt|standard|2': [25, 45],
+    'major-251-alt|standard|3': [50, 70],
+    'major-251-alt|standard|4': [75, 100],
+    'minor-251|long|1': [0, 20],
+    'tritone-251|long|1': [0, 20],
+  },
+  triadPairs: {
+    'backdoor-251|short|3': [50, 50],
+    'coltrane|short|3': [50, 50],
+    'major-251-alt|short|3': [50, 55],
+    'minor-251|short|3': [50, 55],
+    'tritone-251|short|3': [50, 50],
+  },
+  superimposition: {
+    'minor-251|short|3': [50, 50],
+  },
+};
+
+/**
+ * Can the generator deliver `concept` for this progression, length and tier (see CONCEPT_UNAVAILABLE)? With the slider position `pos`
+ * (0..100) only the part of the tier that is listed counts. false when the tier does not offer the concept at all.
+ */
+export function conceptAvailable(concept: ConceptId, progressionId: string, length: LengthId, tier: Tier, pos?: number): boolean {
+  if (!conceptAllowed(concept, tier)) return false;
+  const span = CONCEPT_UNAVAILABLE[concept]?.[`${progressionId}|${length}|${tier}`];
+  if (!span) return true;
+  return pos !== undefined && (pos < span[0] || pos > span[1]);
+}
+
 export const isConceptId = (v: unknown): v is ConceptId => typeof v === 'string' && (CONCEPTS as readonly string[]).includes(v);
 
 /** Device kinds that count as a hit for each concept (anticipateI and guideTones have extra conditions, see conceptHits). */
@@ -174,7 +246,15 @@ function attacksOf(notes: readonly NoteLike[], chords: readonly LickChord[]): At
 
 const contiguous = (a: Att, b: Att): boolean => a.end === b.start;
 const isTone = (q: ChordQualityId, rel: number): boolean => CHORDS[q].tones.some(t => mod12(t) === rel);
-const isGuide = (q: ChordQualityId, rel: number): boolean => CHORDS[q].guide.some(g => mod12(g) === rel);
+/**
+ * The guide tones the detector (and the generator's steering) accept per chord quality: the 3rd and 7th. The m6's 6th is NOT one
+ * (it stands in for a 7th in the symbol only: a line that steps from the V's 3rd onto it is not a 7th-3rd voice-leading line), so
+ * over an m6 only the b3 counts.
+ */
+export const guideRels = (q: ChordQualityId): readonly number[] => (q === 'm6' ? [3] : CHORDS[q].guide);
+const isGuide = (q: ChordQualityId, rel: number): boolean => guideRels(q).some(g => mod12(g) === rel);
+/** The 3rd (or b3) of a chord quality. */
+export const isThird = (q: ChordQualityId, rel: number): boolean => (rel === 3 || rel === 4) && isTone(q, rel);
 
 /* ------------------------------------------------------------------ detectors */
 
@@ -186,8 +266,11 @@ function enclosures(att: Att[], chords: readonly LickChord[], out: DeviceSpan[])
     const T = att[t];
     const off = T.start % TPB;
     if ((off !== 0 && off !== TPB / 2) || !isTone(chords[T.chord].quality, T.rel)) continue;
-    const tq = chords[T.chord].quality;
+    const tch = chords[T.chord];
+    const tq = tch.quality;
     const ts = strength(T.start);
+    // a target that opens its chord on its root / 3rd / 7th may be approached from the previous chord (a cross-barline enclosure)
+    const opens = T.own === T.chord && T.start === tch.start && T.chord > 0 && (T.rel === 0 || isGuide(tq, T.rel));
     for (const k of [3, 2]) {
       if (t - k < 0) continue;
       let ok = true;
@@ -199,9 +282,12 @@ function enclosures(att: Att[], chords: readonly LickChord[], out: DeviceSpan[])
         const d = att[j].midi - T.midi;
         const ad = Math.abs(d);
         if (ad < 1 || ad > 2) { ok = false; break; }
-        // an approach note belongs to the target's chord, does not open a chord and is not accented over the target
-        if (att[j].chord !== T.chord || att[j].own !== T.chord || chords.some(c => c.start === att[j].start) || strength(att[j].start) > ts) { ok = false; break; }
-        if (!isTone(tq, att[j].rel)) outside = true;
+        // an approach note belongs to the target's chord (an opening target: or the chord before it), does not open a chord and is
+        // not accented over the target
+        const sameChord = att[j].chord === T.chord && att[j].own === T.chord;
+        const prevChord = opens && att[j].chord === T.chord - 1 && att[j].own === T.chord - 1;
+        if ((!sameChord && !prevChord) || chords.some(c => c.start === att[j].start) || strength(att[j].start) > ts) { ok = false; break; }
+        if (!isTone(tq, mod12(att[j].midi - tch.rootPc))) outside = true;
         if (d > 0) up = true; else down = true;
         if (ad === 1) half = true;
         if (!contiguous(att[j], att[j + 1])) ok = false;
@@ -241,9 +327,14 @@ function guideTones(att: Att[], chords: readonly LickChord[], out: DeviceSpan[])
   }
 }
 
-function anticipations(att: Att[], out: DeviceSpan[]): void {
+function anticipations(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]): void {
   for (const a of att) {
-    if (a.chord !== a.own) out.push({ kind: 'anticipation', first: a.first, last: a.last, chord: a.chord, target: a.first });
+    if (a.chord === a.own) continue;
+    // a tie that is only a chord tone of the chord it leaves (V root -> I 5th, V 3rd -> I 7th) sounds like a held note, not an
+    // anticipation: it counts only when it is the new chord's root or 3rd / b3
+    const old = chords[a.own];
+    if (isTone(old.quality, mod12(a.midi - old.rootPc)) && a.rel !== 0 && !isThird(chords[a.chord].quality, a.rel)) continue;
+    out.push({ kind: 'anticipation', first: a.first, last: a.last, chord: a.chord, target: a.first });
   }
 }
 
@@ -411,10 +502,10 @@ function superimpositions(att: Att[], chords: readonly LickChord[], out: DeviceS
     const takenIn = (s: number, e: number): boolean => { for (let i = s; i <= e; i++) if (taken.has(seg[i].first)) return true; return false; };
     // genuinely outside: at least 2 pitch classes beyond the chord's parent scale
     const scaleMask = rotMask(SCALE_MASK[ch.quality], ch.rootPc);
-    const outsideScale = (s: number, e: number): boolean => {
+    const outsideScale = (s: number, e: number, min = 2): boolean => {
       let m = 0;
       for (let i = s; i <= e; i++) m |= bit[i];
-      return POP[m & ~scaleMask] >= 2;
+      return POP[m & ~scaleMask] >= min;
     };
     // (a) a ii-V a fourth apart: the m7 first, then the 7. Not the chord's own ii-V (Gm7-C7 over C7, Dm7-G7 over Cmaj7) nor the
     // m7 a fifth above the root (an upper structure: Gm7 over C7, Am7 over Dm7).
@@ -422,6 +513,8 @@ function superimpositions(att: Att[], chords: readonly LickChord[], out: DeviceS
       if (r === ch.rootPc || r === mod12(ch.rootPc + 7) || (ch.quality === 'maj7' && r === mod12(ch.rootPc + 2))) continue;
       const iiM = M7_MASK[r];
       const vM = D7_MASK[(r + 5) % 12];
+      // the ii-V of the tritone substitute (Abm7-Db7 over G7alt): its tones are mostly altered-scale tones, so one pitch class outside suffices
+      const subIiV = (ch.quality === 'dom7' || ch.quality === 'dom7alt') && r === mod12(ch.rootPc + 1);
       for (let k = 2; k + 2 <= n; k++) {
         if (!(iiM & bit[k - 1]) || !(vM & bit[k])) continue;
         let s = k;
@@ -436,7 +529,7 @@ function superimpositions(att: Att[], chords: readonly LickChord[], out: DeviceS
         if (POP[L] < 3 || POP[R] < 3 || POP[L & ~vM] < 2 || POP[R & ~iiM] < 2) continue;
         let leaps = 0;
         for (let i = s + 1; i <= e; i++) if (Math.abs(seg[i].midi - seg[i - 1].midi) >= 3) leaps++;
-        if (leaps >= (e - s) / 2 && outsideScale(s, e)) { mark(s, e); break; }
+        if (leaps >= (e - s) / 2 && outsideScale(s, e, subIiV ? 1 : 2)) { mark(s, e); break; }
       }
     }
     // (b) the dominant a tritone away, over a dominant chord
@@ -471,7 +564,7 @@ function sideSlips(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]):
       const ch = chords[w[0].chord];
       if (!isTone(ch.quality, R.rel) || Math.abs(R.midi - w[w.length - 1].midi) > 2) continue;
       const outside = w.filter(a => !inScale(a.midi, ch.rootPc, ch.quality)).length;
-      if (outside < 2) continue;
+      if (outside < 2 || w[w.length - 1].end - w[0].start < TPB) continue; // figure + resolution are 4+ notes and the figure fills at least a beat (a quick 3-note 16th gesture is not a side-slip)
       // the figure is a chord-tone figure shifted a half step
       const shifted = [1, -1].some(sh => w.every(a => isTone(ch.quality, mod12(a.rel - sh))));
       if (!shifted) continue;
@@ -496,7 +589,7 @@ export function detectDevices(lick: Pick<Lick, 'notes' | 'chords'>, kinds?: read
   if (want('enclosure')) enclosures(att, chords, out);
   if (want('chromatic')) chromatics(att, chords, out);
   if (want('guideTone')) guideTones(att, chords, out);
-  if (want('anticipation')) anticipations(att, out);
+  if (want('anticipation')) anticipations(att, chords, out);
   if (want('triadPair')) triadPairs(att, chords, out);
   if (want('sixthDim')) sixthDims(att, chords, out);
   if (want('superimposition')) superimpositions(att, chords, out);

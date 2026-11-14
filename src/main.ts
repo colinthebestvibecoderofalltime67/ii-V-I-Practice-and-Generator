@@ -148,7 +148,7 @@ function syncControls(): void {
   hint.textContent = hintText;
   $<HTMLSelectElement>('sel-focus').value = settings.focus;
   $('focus-desc').textContent = settings.focus === 'any' ? 'No particular device: a mix of the usual vocabulary.' : CONCEPT_DESC[settings.focus];
-  const fh = settings.focus === 'any' ? '' : focusHint(settings.focus, targetTier());
+  const fh = settings.focus === 'any' ? '' : focusHint(settings.focus, targetTier(), prog, settings.length, settings.target);
   $('focus-hint').hidden = !fh;
   $('focus-hint').textContent = fh;
 

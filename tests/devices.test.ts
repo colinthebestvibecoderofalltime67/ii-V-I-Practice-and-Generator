@@ -10,7 +10,7 @@ import { generateLick } from '../src/generator';
 import { concertRange, getInstrument } from '../src/instruments';
 import { sanitizeSettings } from '../src/storage';
 import {
-  CONCEPTS, CONCEPT_MIN_TIER, conceptAllowed, conceptHits, detectDevices, displayDevices, type DeviceKind,
+  CONCEPTS, CONCEPT_MIN_TIER, conceptAllowed, conceptAvailable, conceptHits, detectDevices, displayDevices, type DeviceKind,
 } from '../src/theory/devices';
 import { expandProgression, getProgression } from '../src/theory/progressions';
 import type { ChordQualityId, ConceptId, Fragment, Lick, LickChord, LickNote, Tier } from '../src/types';
@@ -164,10 +164,12 @@ describe('detectDevices: each device on a hand-built lick', () => {
 
   it('side-slip: a chord-tone figure a half step away that resolves by step onto a chord tone', () => {
     // Cmaj7: C (beat 1), then the E G B figure slipped down a half step (Eb Gb Bb), resolving up to B
-    const l = mk(one('maj7'), [[60, Q], [63, E], [66, E], [70, E], [71, Q + E], [null, Q * 2]].map(([m, d]) => [m, d] as Spec));
+    const l = mk(one('maj7'), [[60, Q], [63, E], [66, E], [70, E], [71, E], [72, Q], [null, Q * 2]].map(([m, d]) => [m, d] as Spec));
     const d = detectDevices(l, ['sideSlip']);
     expect(d).toHaveLength(1);
-    expect([d[0].first, d[0].last]).toEqual([1, 4]);
+    expect([d[0].first, d[0].last]).toEqual([1, 5]);
+    // a quick three-note 16th gesture (Eb Gb Bb) is not a side-slip: the figure must be 4+ notes with the resolution and fill a beat
+    expect(kinds(mk(one('maj7'), [[60, Q], [63, 3], [66, 3], [70, 3], [71, Q + E], [null, Q * 2]].map(([m, d]) => [m, d] as Spec)), ['sideSlip'])).toEqual([]);
     // the same figure kept in the scale (E G B) is not a slip
     expect(kinds(mk(one('maj7'), [[60, Q], [64, E], [67, E], [71, E], [72, Q + E], [null, Q * 2]]), ['sideSlip'])).toEqual([]);
   });
@@ -329,19 +331,25 @@ describe('Focus hit rates and slider accuracy', () => {
   /** What the generator is held to, per concept and tier (the share of licks / chord changes that really contain the device). */
   // Beginner enclosures and Advanced superimpositions over a 7alt chord cannot always stay inside the slider's tier (altered notes cost a
   // tier) and the detectors are now strict (approach notes never open a chord or sit on the bar downbeat), so those two are held to 0.8.
-  const floor = (c: ConceptId, t: Tier): number => (c === 'guideTones' ? 0.7 : c === 'chromaticApproach' && t === 1 ? 0.1 : (c === 'enclosures' && t === 1) || (c === 'superimposition' && t === 3) ? 0.8 : 0.9);
+  const floor = (c: ConceptId, t: Tier): number => (c === 'guideTones' ? 0.7 : c === 'chromaticApproach' && t === 1 ? 0.6 : (c === 'enclosures' && t === 1) || (c === 'superimposition' && t === 3) ? 0.8 : 0.9);
   const maes: number[] = [];
   for (const c of CONCEPTS) {
     for (const t of [1, 2, 3, 4] as Tier[]) {
       if (!conceptAllowed(c, t)) continue;
       it(`${c} at ${t}: >= ${Math.round(100 * floor(c, t))}% of the licks deliver it, slider error stays close to the no-focus error`, () => {
         const licks = conceptSample(c, t);
-        const r = conceptHitRate(licks, c);
+        // combinations the UI says the generator cannot carry (conceptAvailable, e.g. anticipating the I of an altered V) are not held to the floor
+        const pos = t * 25 - 12.5;
+        const offered = licks.filter(l => conceptAvailable(c, l.progressionId, l.length, t, pos));
+        const r = conceptHitRate(offered, c);
+        expect(offered.length, `${c} T${t}`).toBeGreaterThanOrEqual(c === 'chromaticApproach' && t === 1 ? 8 : licks.length / 2); // Beginner leaves little score room for a chromatic note: most progressions are listed in CONCEPT_UNAVAILABLE there
         expect(r.rate, `${c} T${t} hit ${r.hits}/${r.of}`).toBeGreaterThanOrEqual(floor(c, t));
         for (const l of licks) expect(l.focus).toBe(c);
         const diff = sliderError(licks) - sliderError(conceptSample(undefined, t));
         maes.push(diff);
-        expect(diff, `${c} T${t}`).toBeLessThanOrEqual(c === 'enclosures' && t === 1 ? 1.4 : 1.2); // Expert guide tones is the weak spot; Beginner enclosures over 7alt sit out of tier
+        // Expert guide tones is the weak spot; Beginner enclosures over 7alt sit out of tier. FX4: a missed device now costs 10 (Beginner / Intermediate) to
+        // 16 (Advanced) score points in the candidate ranking, so a delivering candidate may sit further from the slider target inside its tier.
+        expect(diff, `${c} T${t}`).toBeLessThanOrEqual(c === 'enclosures' && t === 1 ? 1.7 : t === 3 && (c === 'triadPairs' || c === 'superimposition') ? 1.5 : 1.2);
       }, 40_000);
     }
   }

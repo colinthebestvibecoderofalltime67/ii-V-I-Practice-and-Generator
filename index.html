@@ -121,6 +121,10 @@
 
   <aside class="side" aria-labelledby="side-h">
     <h2 id="side-h" class="side-h">Next lick</h2>
+    <!-- phone-bar:settings-start (on phones this folds; on desktop the summary is hidden and it stays open) -->
+    <details class="fold" id="lick-settings" open>
+    <summary class="fold-sum"><span class="fold-name">Lick settings</span><span class="fold-recap mono" id="fold-recap"></span></summary>
+    <div class="fold-body">
     <fieldset class="group">
       <legend class="label">Progression</legend>
       <div id="prog-list" class="radio-list"></div>
@@ -153,9 +157,27 @@
         <div id="len-list" class="radio-row"></div>
       </fieldset>
     </div>
+    </div>
+    </details>
+    <!-- phone-bar:settings-end -->
     <button type="button" id="btn-gen" class="btn ink gen">Generate lick <kbd class="mono">G</kbd></button>
   </aside>
 </div>
+
+<!-- phone-bar:start (visible only at <= 760px) -->
+<nav class="pbar" id="pbar" aria-label="Practice controls">
+  <button type="button" id="pb-play" class="btn primary pb-play">
+    <svg id="pb-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>
+    <span id="pb-play-label">Play</span>
+  </button>
+  <button type="button" id="pb-next" class="btn pb-next" aria-label="Next lick (generate)">Next</button>
+  <div class="pb-key">
+    <button type="button" id="pb-dn" class="btn square mono" aria-label="Key down a semitone">−</button>
+    <p class="pb-read mono" id="pb-read" role="status" aria-live="polite"><span id="pb-key"></span><span id="pb-bar" class="muted"></span></p>
+    <button type="button" id="pb-up" class="btn square mono" aria-label="Key up a semitone">+</button>
+  </div>
+</nav>
+<!-- phone-bar:end -->
 
 <footer class="foot">
   <p class="wrap">Every lick is generated from original melodic cells; difficulty is computed from the notes. Notation by VexFlow, sound synthesized in your browser.</p>

@@ -1,0 +1,136 @@
+import type { ChordQualityId, FragTag, Fragment, Tier } from '../../types';
+import { parseNotes } from './notation';
+
+/**
+ * Phase 2b cells (original), same compact notation as vocab.ts (rel:dur in 16ths, scaled x3 on load).
+ *
+ *  - dom7alt-gt-NN: simple Level 1-2 cells over a 7alt chord that DO carry one alteration as a long, clear guide-tone note
+ *    (3 -> b9 in half notes, b13 -> b9 -> R, b7 -> b13, #9 -> 3, a b9 quarter on beat 3 resolving down). Beginners and
+ *    Intermediate players then hear the altered sound without a dense altered scale line. Only b9, #9 and b13 are used.
+ *  - maj7-p2b-NN, m7-p2b-NN, m7b5-p2b-NN, m6-p2b-NN: Level 4 four-beat lines that replace the exercise-like cells removed from vocab.ts
+ *    (long 16th-note sequences, one 3-note broken chord stated twice): eighth-note lines with enclosures, lower neighbours and
+ *    a short rest, no repeated interval pattern, no leap of a minor 7th or more, the 4th over maj7 only as an off-beat passing tone.
+ *  - dom7-lyd-NN: Lydian dominant (R 2 3 #11 5 13 b7) lines for plain dominants: tritone-sub (bII7) and backdoor (bVII7) V chords.
+ *    The #11 (rel 6) is always an off-beat passing note, and the natural 11 (rel 5) never appears, so these are the cells to use
+ *    when the dominant should not sound like plain Mixolydian.
+ */
+type Q = ChordQualityId;
+const a = (id: string, qualities: Q[], beats: 2 | 4, level: Tier, tags: FragTag[], notes: string): Fragment =>
+  ({ id, qualities, beats, notes: parseNotes(notes, 1), tags, level, source: 'original' });
+const e = (id: string, qualities: Q[], beats: 2 | 4, level: Tier, tags: FragTag[], notes: string): Fragment => ({ ...a(id, qualities, beats, level, tags, notes), ending: true });
+const MIN: Q[] = ['m7'];
+const HALF: Q[] = ['m7b5'];
+const MAJ: Q[] = ['maj7'];
+const MIN6: Q[] = ['m6', 'mMaj7'];
+const DOM: Q[] = ['dom7'];
+const ALT: Q[] = ['dom7alt'];
+
+export const PHASE2B_FRAGMENTS: Fragment[] = [
+  a('maj7-p2b-01', MAJ, 4, 4, ['scale', 'bebop'], '4:2 7:2 11:2 9:2 7:2 6:1 7:1 4:2 2:1 0:1'),
+  a('maj7-p2b-02', MAJ, 4, 4, ['arpeggio', 'scale'], '14:2 11:2 9:2 7:2 4:2 7:2 11:2 12:2'),
+  a('maj7-p2b-03', MAJ, 4, 4, ['scale', 'bebop'], '0:1 2:1 4:2 7:2 11:2 9:2 7:2 4:1 2:1 0:2'),
+  a('maj7-p2b-04', MAJ, 4, 4, ['arpeggio'], 'r:2 4:2 7:2 11:2 14:2 12:2 11:2 9:2'),
+  a('maj7-p2b-05', MAJ, 4, 4, ['chromatic', 'enclosure'], '7:2 6:1 7:1 4:2 2:2 4:2 7:2 11:2 7:2'),
+  a('maj7-p2b-06', MAJ, 4, 4, ['scale', 'arpeggio'], '12:1 11:1 9:1 7:1 4:2 7:2 11:2 14:2 12:2 11:1 9:1'),
+  a('maj7-p2b-07', MAJ, 4, 4, ['arpeggio', 'scale'], '4:4 7:2 11:2 14:2 12:2 11:1 9:1 7:2'),
+  a('maj7-p2b-08', MAJ, 4, 4, ['arpeggio'], '11:4 r:2 9:1 7:1 4:2 7:2 11:4'),
+  a('m6-p2b-01', MIN6, 4, 4, ['arpeggio', 'scale'], '3:2 7:2 9:2 12:2 11:2 9:2 7:2 3:2'),
+  a('m6-p2b-02', MIN6, 4, 4, ['scale', 'chromatic'], '12:2 9:2 7:2 5:1 3:1 2:2 3:2 7:2 9:2'),
+  a('m6-p2b-03', MIN6, 4, 4, ['arpeggio', 'scale'], '7:2 9:2 11:2 14:2 15:2 14:2 11:2 7:2'),
+  a('m6-p2b-04', MIN6, 4, 4, ['arpeggio', 'scale'], '0:2 3:2 7:2 9:2 12:2 11:1 9:1 7:2 3:2'),
+  a('m6-p2b-05', MIN6, 4, 4, ['chromatic', 'scale'], '9:4 7:2 3:2 2:2 3:2 7:1 8:1 9:2'),
+  a('m6-p2b-06', MIN6, 4, 4, ['arpeggio'], 'r:2 3:2 7:2 11:2 12:2 11:2 9:2 7:2'),
+  a('m6-p2b-07', MIN6, 4, 4, ['scale'], '11:2 12:2 14:2 15:2 12:2 11:1 9:1 7:2 3:2'),
+  a('m6-p2b-08', MIN6, 4, 4, ['scale'], '15:4 14:2 12:2 11:2 9:2 7:2 3:2'),
+  a('m7-p2b-01', MIN, 4, 4, ['scale', 'bebop'], '10:2 14:2 12:2 10:2 7:2 5:1 3:1 2:2 0:2'),
+  a('m7-p2b-02', MIN, 4, 4, ['arpeggio', 'scale'], '3:2 7:2 10:2 14:2 12:2 10:1 9:1 7:2 3:2'),
+  a('m7-p2b-03', MIN, 4, 4, ['arpeggio'], '0:2 -2:2 -5:2 -2:2 0:2 3:2 7:2 10:2'),
+  a('m7-p2b-04', MIN, 4, 4, ['scale'], '12:4 10:2 9:2 7:2 5:2 3:2 2:1 3:1'),
+  a('m7-p2b-05', MIN, 4, 4, ['arpeggio'], 'r:2 3:2 7:2 10:2 14:2 15:2 14:2 10:2'),
+  a('m7-p2b-06', MIN, 4, 4, ['arpeggio', 'scale'], '14:2 12:2 10:2 7:2 3:2 5:2 7:2 10:2'),
+  a('m7-p2b-07', MIN, 4, 4, ['arpeggio', 'scale'], '7:2 10:2 12:1 14:1 15:2 14:2 10:2 7:2 3:2'),
+  a('m7b5-p2b-01', HALF, 4, 4, ['arpeggio', 'chromatic'], '10:2 8:2 6:2 5:1 3:1 6:2 10:2 12:2 10:2'),
+  a('m7b5-p2b-02', HALF, 4, 4, ['arpeggio', 'scale'], '3:2 6:2 10:2 12:2 10:2 8:2 6:2 3:2'),
+  a('m7b5-p2b-03', HALF, 4, 4, ['arpeggio'], '6:4 5:2 3:2 0:2 3:2 6:2 10:2'),
+  e('m6-p2bend-01', MIN6, 4, 2, ['guide-tone'], '7:4 3:4 0:8'),
+  e('m6-p2bend-02', MIN6, 4, 2, ['guide-tone'], '9:4 7:4 3:8'),
+  e('m6-p2bend-03', MIN6, 4, 2, ['arpeggio'], '12:4 9:4 7:8'),
+  a('dom7alt-gt-01', ALT, 2, 1, ['guide-tone', 'altered'], '4:4 1:4'),
+  a('dom7alt-gt-02', ALT, 2, 1, ['guide-tone', 'altered'], '8:4 1:4'),
+  a('dom7alt-gt-03', ALT, 2, 1, ['guide-tone', 'altered'], '1:4 0:4'),
+  a('dom7alt-gt-04', ALT, 2, 1, ['guide-tone', 'altered'], '13:4 12:4'),
+  a('dom7alt-gt-05', ALT, 2, 1, ['guide-tone', 'altered'], '15:4 16:4'),
+  a('dom7alt-gt-06', ALT, 2, 1, ['guide-tone', 'altered'], '3:4 4:4'),
+  a('dom7alt-gt-07', ALT, 2, 1, ['guide-tone', 'altered'], '10:4 8:4'),
+  a('dom7alt-gt-08', ALT, 2, 1, ['guide-tone', 'altered'], '8:4 10:4'),
+  a('dom7alt-gt-09', ALT, 2, 1, ['guide-tone', 'altered'], '20:4 13:4'),
+  a('dom7alt-gt-10', ALT, 2, 1, ['guide-tone', 'altered'], '16:4 13:4'),
+  a('dom7alt-gt-11', ALT, 2, 1, ['guide-tone', 'altered'], '10:4 13:4'),
+  a('dom7alt-gt-12', ALT, 2, 1, ['guide-tone', 'altered'], '4:4 3:4'),
+  a('dom7alt-gt-13', ALT, 2, 1, ['guide-tone', 'altered'], '8:4 3:4'),
+  a('dom7alt-gt-14', ALT, 2, 1, ['guide-tone', 'altered'], '12:4 13:2 12:2'),
+  a('dom7alt-gt-15', ALT, 2, 1, ['guide-tone', 'altered'], '10:2 8:2 1:4'),
+  a('dom7alt-gt-16', ALT, 2, 1, ['guide-tone', 'altered'], '4:2 3:2 0:4'),
+  a('dom7alt-gt-17', ALT, 2, 1, ['guide-tone', 'altered'], '15:4 13:2 12:2'),
+  a('dom7alt-gt-18', ALT, 2, 1, ['guide-tone', 'altered'], '16:2 15:2 13:4'),
+  a('dom7alt-gt-19', ALT, 2, 1, ['guide-tone', 'altered'], '10:4 13:2 12:2'),
+  a('dom7alt-gt-20', ALT, 2, 1, ['guide-tone', 'altered'], '8:2 10:2 13:4'),
+  a('dom7alt-gt-21', ALT, 4, 1, ['guide-tone', 'altered'], '4:8 1:8'),
+  a('dom7alt-gt-22', ALT, 4, 1, ['guide-tone', 'altered'], '8:4 1:4 0:8'),
+  a('dom7alt-gt-23', ALT, 4, 1, ['guide-tone', 'altered'], '10:8 8:8'),
+  a('dom7alt-gt-24', ALT, 4, 1, ['guide-tone', 'altered'], '10:4 4:4 1:4 0:4'),
+  a('dom7alt-gt-25', ALT, 4, 1, ['guide-tone', 'altered'], '3:8 4:8'),
+  a('dom7alt-gt-26', ALT, 4, 1, ['guide-tone', 'altered'], '15:8 16:8'),
+  a('dom7alt-gt-27', ALT, 4, 1, ['guide-tone', 'altered'], '4:4 10:4 13:4 12:4'),
+  a('dom7alt-gt-28', ALT, 4, 1, ['guide-tone', 'altered'], '10:4 8:4 13:4 12:4'),
+  a('dom7alt-gt-29', ALT, 4, 1, ['guide-tone', 'altered'], '20:4 13:4 12:8'),
+  a('dom7alt-gt-30', ALT, 4, 1, ['guide-tone', 'altered'], '16:8 13:4 12:4'),
+  a('dom7alt-gt-31', ALT, 4, 1, ['guide-tone', 'altered'], '12:4 10:4 13:8'),
+  a('dom7alt-gt-32', ALT, 4, 1, ['guide-tone', 'altered'], '4:4 3:4 1:4 0:4'),
+  a('dom7alt-gt-33', ALT, 4, 1, ['guide-tone', 'altered'], '10:4 8:4 4:4 3:4'),
+  a('dom7alt-gt-34', ALT, 4, 1, ['guide-tone', 'altered'], '0:8 4:4 1:4'),
+  a('dom7alt-gt-35', ALT, 4, 1, ['guide-tone', 'altered'], '8:8 3:4 4:4'),
+  a('dom7alt-gt-36', ALT, 4, 1, ['guide-tone', 'altered'], '13:4 12:4 10:4 4:4'),
+  a('dom7alt-gt-37', ALT, 4, 1, ['guide-tone', 'altered'], '1:4 4:4 10:8'),
+  a('dom7alt-gt-38', ALT, 4, 1, ['guide-tone', 'altered'], '15:4 13:4 12:8'),
+  a('dom7alt-gt-39', ALT, 4, 1, ['guide-tone', 'altered'], '16:4 15:4 13:4 12:4'),
+  a('dom7alt-gt-40', ALT, 4, 1, ['guide-tone', 'altered'], '10:8 13:4 12:4'),
+  a('dom7alt-gt-41', ALT, 2, 2, ['altered', 'guide-tone'], '4:2 10:2 13:2 12:2'),
+  a('dom7alt-gt-42', ALT, 2, 2, ['altered', 'guide-tone'], '10:2 13:2 12:2 4:2'),
+  a('dom7alt-gt-43', ALT, 2, 2, ['altered', 'guide-tone'], '8:2 4:2 3:2 0:2'),
+  a('dom7alt-gt-44', ALT, 2, 2, ['altered', 'guide-tone'], '16:2 13:2 12:2 10:2'),
+  a('dom7alt-gt-45', ALT, 2, 2, ['altered', 'guide-tone'], '12:2 13:2 12:2 4:2'),
+  a('dom7alt-gt-46', ALT, 2, 2, ['altered', 'guide-tone'], '15:2 16:2 13:2 12:2'),
+  a('dom7alt-gt-47', ALT, 2, 2, ['altered', 'guide-tone'], '10:2 8:2 3:2 4:2'),
+  a('dom7alt-gt-48', ALT, 2, 2, ['altered', 'guide-tone'], '1:2 0:2 4:2 10:2'),
+  a('dom7alt-gt-49', ALT, 4, 2, ['altered', 'guide-tone'], '4:4 10:2 13:2 12:4 10:4'),
+  a('dom7alt-gt-50', ALT, 4, 2, ['altered', 'guide-tone'], '10:4 8:2 4:2 3:4 4:4'),
+  a('dom7alt-gt-51', ALT, 4, 2, ['altered', 'guide-tone'], '12:2 13:2 12:2 10:2 8:4 4:4'),
+  a('dom7alt-gt-52', ALT, 4, 2, ['altered', 'guide-tone'], '16:4 13:4 12:2 10:2 4:4'),
+  a('dom7alt-gt-53', ALT, 4, 2, ['altered', 'guide-tone'], '4:2 8:2 10:2 13:2 12:4 10:2 8:2'),
+  a('dom7alt-gt-54', ALT, 4, 2, ['altered', 'guide-tone'], '10:2 13:2 12:2 10:2 8:4 3:4'),
+  a('dom7alt-gt-55', ALT, 4, 2, ['altered', 'guide-tone'], '8:4 10:4 13:4 12:4'),
+  a('dom7alt-gt-56', ALT, 4, 2, ['altered', 'guide-tone'], '15:4 16:4 13:4 12:4'),
+  a('dom7alt-gt-57', ALT, 4, 2, ['altered', 'guide-tone'], '0:2 4:2 10:2 13:2 12:8'),
+  a('dom7alt-gt-58', ALT, 4, 2, ['altered', 'guide-tone'], '4:2 3:2 1:2 0:2 -2:4 0:4'),
+  a('dom7alt-gt-59', ALT, 4, 2, ['altered', 'guide-tone'], '13:4 12:2 10:2 8:4 4:4'),
+  a('dom7alt-gt-60', ALT, 4, 2, ['altered', 'guide-tone'], '10:4 13:2 12:2 16:4 15:4'),
+  a('dom7-lyd-01', DOM, 2, 2, ['scale'], '4:2 6:2 7:2 10:2'),
+  a('dom7-lyd-02', DOM, 2, 2, ['scale'], '9:2 6:2 7:2 4:2'),
+  a('dom7-lyd-03', DOM, 2, 2, ['scale'], '7:2 6:2 4:2 2:2'),
+  a('dom7-lyd-04', DOM, 2, 2, ['scale'], '4:2 6:2 7:2 4:2'),
+  a('dom7-lyd-05', DOM, 2, 3, ['arpeggio'], '2:2 6:2 9:2 10:2'),
+  a('dom7-lyd-06', DOM, 2, 3, ['scale'], '10:2 9:2 7:2 6:1 4:1'),
+  a('dom7-lyd-07', DOM, 2, 3, ['scale'], '7:2 9:2 7:1 6:1 4:2'),
+  a('dom7-lyd-08', DOM, 2, 3, ['arpeggio'], '2:2 6:2 9:2 7:2'),
+  a('dom7-lyd-09', DOM, 4, 2, ['scale'], '9:2 10:2 9:2 6:2 7:8'),
+  a('dom7-lyd-10', DOM, 4, 3, ['scale'], '4:2 6:2 7:2 9:2 10:2 9:2 7:2 4:2'),
+  a('dom7-lyd-11', DOM, 4, 3, ['scale'], '10:2 9:2 7:2 6:2 4:2 2:2 0:2 -2:2'),
+  a('dom7-lyd-12', DOM, 4, 3, ['arpeggio'], '2:2 6:2 9:2 12:2 9:2 6:2 4:2 7:2'),
+  a('dom7-lyd-13', DOM, 4, 3, ['scale'], '4:2 6:2 7:2 10:2 9:2 7:1 6:1 4:4'),
+  a('dom7-lyd-14', DOM, 4, 3, ['scale'], '10:4 9:2 6:2 7:4 4:4'),
+  a('dom7-lyd-15', DOM, 4, 3, ['scale'], '4:2 6:2 4:2 7:2 10:4 9:2 7:2'),
+  a('dom7-lyd-16', DOM, 4, 4, ['scale', 'chromatic'], '14:2 10:2 9:2 6:2 7:2 4:2 2:2 4:2'),
+  a('dom7-lyd-17', DOM, 4, 4, ['scale'], '12:2 14:2 9:2 6:2 7:2 10:2 9:2 7:2'),
+  a('dom7-lyd-18', DOM, 4, 4, ['scale'], '2:2 4:1 6:1 7:2 9:2 7:2 6:1 4:1 2:2 4:2'),
+];

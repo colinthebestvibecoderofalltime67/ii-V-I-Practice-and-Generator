@@ -67,9 +67,7 @@ export type FragTag =
   /** Barry Harris 6th-diminished scale line over maj7 / m6. */
   | 'sixth-dim'
   /** A different ii-V (or a tritone-sub / half-step side-slip figure) played over one chord. */
-  | 'superimposition'
-  /** First note is a chord tone that can sound early over the previous chord (tied-over anticipation into the I). */
-  | 'anticipation-target';
+  | 'superimposition';
 
 /**
  * A "Focus" concept the player can practise (see src/theory/devices.ts for how each is found in the notes).

@@ -4,7 +4,7 @@ import {
 } from 'vexflow';
 import type { Instrument, Lick } from '../types';
 import type { DeviceKind } from '../theory/devices';
-import { TPBAR } from '../types';
+import { TPB, TPBAR } from '../types';
 import { barOf, findTupletGroups, isTupletDur, splitDur, tupletDisplayDur, type TupletKind } from '../theory/rhythm';
 import { keySignatureName, mod12 } from '../theory/pitch';
 import { chordSymbolText, formatSpelling, spellChordRoot, spellLick } from '../theory/spell';
@@ -452,7 +452,15 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
   const devMarks = (opts.devices ?? []).filter(d => lick.notes[d.first] && lick.notes[d.last] && d.last >= d.first);
   const devSpan = (d: DeviceMark): [number, number] => [lick.notes[d.first].start, lick.notes[d.last].start + lick.notes[d.last].dur];
   const devSorted = [...devMarks].sort((a, b) => devSpan(a)[0] - devSpan(b)[0]);
-  const devRows = !devSorted.length ? 0 : devSorted.some((d, i) => i > 0 && devSpan(d)[0] < Math.max(...devSorted.slice(0, i).map(e => devSpan(e)[1])) + 12) ? 2 : 1;
+  // rows by greedy packing on time, each bracket reserving at least the time its label needs (~40 px per beat)
+  const devRowEnds: number[] = [];
+  for (const d of devSorted) {
+    const [t0, t1] = devSpan(d);
+    const end = Math.max(t1, t0 + Math.ceil(((d.label.length * 5.4 + 4) / 40) * TPB)) + 6;
+    const r = devRowEnds.findIndex(e => t0 >= e);
+    if (r >= 0) devRowEnds[r] = end; else devRowEnds.push(end);
+  }
+  const devRows = Math.min(3, devRowEnds.length);
   const DEV_ROW = 13;
   const DEV_H = devRows ? 8 + devRows * DEV_ROW : 0;
   const extraTop = Math.max(0, (hi - topLineMidi) * 2.9 + 4) + (hasTuplets ? TUP_H : 0);
@@ -689,6 +697,16 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
     ctx.openGroup('hidden-notes');
     ctx.save();
     ctx.setFont(ROMAN_FONT, 10, 'normal');
+    // VexFlow's SVG text measurement returns 0 here (and caches it), so measure with a canvas 2D context (10pt = 13.33px,
+    // the size ctx.setFont draws at) and fall back to a monospace estimate (0.6 em per character).
+    const devTextW = (t: string): number => {
+      let m = 0;
+      try {
+        const c2 = document.createElement('canvas').getContext('2d');
+        if (c2) { c2.font = `${(10 * 4) / 3}px ${ROMAN_FONT}`; m = c2.measureText(t).width; }
+      } catch { /* no canvas: estimate */ }
+      return m > 0 ? m : t.length * 8;
+    };
     const ink = print ? '#000' : '#4A4944';
     ctx.setFillStyle(ink);
     ctx.setStrokeStyle(ink);
@@ -707,10 +725,13 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
         const na = drawnNotes.get(i);
         const nz = drawnNotes.get(j);
         if (na && nz) {
-          perSys[sysOfPiece[i]].push({
-            x1: na.getNoteHeadBeginX() - 2, x2: nz.getNoteHeadEndX() + 2, label: firstSeg ? d.label : null,
-            labelW: firstSeg ? ctx.measureText(d.label).width : 0, openLeft: !firstSeg, openRight: j < z,
-          });
+          const x1 = na.getNoteHeadBeginX() - 2;
+          const x2 = nz.getNoteHeadEndX() + 2;
+          // a continuation past a system break is labelled "(encl.)"; a tiny stub (< 10 px) is not drawn
+          const label = firstSeg ? d.label : x2 - x1 >= 10 ? `(${d.label})` : null;
+          if (firstSeg || label) {
+            perSys[sysOfPiece[i]].push({ x1, x2, label, labelW: label ? devTextW(label) : 0, openLeft: !firstSeg, openRight: j < z });
+          }
           firstSeg = false;
         }
         i = j + 1;
@@ -721,8 +742,11 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
       const bandTop = y0 + CHORD_BASE + 6;
       const rowRight: number[] = Array(devRows).fill(-Infinity);
       for (const sg of [...segs].sort((p, q) => p.x1 - q.x1)) {
-        const ext = Math.max(sg.x2, sg.x1 + sg.labelW);
-        const row = rowRight.findIndex(r => sg.x1 >= r + 4);
+        // the label sits at the bracket start, pulled left only as far as needed to stay inside the page
+        const lx = Math.max(MARGIN, Math.min(sg.x1, layoutW + MARGIN - sg.labelW - 2));
+        const left = Math.min(sg.x1, lx);
+        const ext = Math.max(sg.x2, lx + sg.labelW);
+        const row = rowRight.findIndex(r => left >= r + 4);
         if (row < 0) continue; // no room: the device is still listed in the Analysis panel
         rowRight[row] = ext;
         const base = bandTop + 9 + row * DEV_ROW; // text baseline
@@ -733,7 +757,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
         ctx.lineTo(sg.x2, ly);
         ctx.lineTo(sg.x2, ly + (sg.openRight ? 0 : 3));
         ctx.stroke();
-        if (sg.label) ctx.fillText(sg.label, Math.max(MARGIN, Math.min(sg.x1, layoutW + MARGIN - sg.labelW - 2)), base);
+        if (sg.label) ctx.fillText(sg.label, lx, base);
       }
     });
     ctx.restore();

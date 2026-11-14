@@ -178,27 +178,36 @@ const isGuide = (q: ChordQualityId, rel: number): boolean => CHORDS[q].guide.som
 
 /* ------------------------------------------------------------------ detectors */
 
+/** Accent of an attack: 1 on the bar downbeat, 0 elsewhere (an approach note must not be accented over its target). */
+const strength = (start: number): number => (start % (4 * TPB) === 0 ? 1 : 0);
+
 function enclosures(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]): void {
   for (let t = 2; t < att.length; t++) {
     const T = att[t];
     const off = T.start % TPB;
     if ((off !== 0 && off !== TPB / 2) || !isTone(chords[T.chord].quality, T.rel)) continue;
+    const tq = chords[T.chord].quality;
+    const ts = strength(T.start);
     for (const k of [3, 2]) {
       if (t - k < 0) continue;
       let ok = true;
       let up = false;
       let down = false;
       let half = false;
+      let outside = false;
       for (let j = t - k; j < t && ok; j++) {
         const d = att[j].midi - T.midi;
         const ad = Math.abs(d);
         if (ad < 1 || ad > 2) { ok = false; break; }
+        // an approach note belongs to the target's chord, does not open a chord and is not accented over the target
+        if (att[j].chord !== T.chord || att[j].own !== T.chord || chords.some(c => c.start === att[j].start) || strength(att[j].start) > ts) { ok = false; break; }
+        if (!isTone(tq, att[j].rel)) outside = true;
         if (d > 0) up = true; else down = true;
         if (ad === 1) half = true;
         if (!contiguous(att[j], att[j + 1])) ok = false;
         if (j > t - k) { const iv = Math.abs(att[j].midi - att[j - 1].midi); if (iv < 1 || iv > 4) ok = false; }
       }
-      if (ok && up && down && half) {
+      if (ok && up && down && half && outside) {
         out.push({ kind: 'enclosure', first: att[t - k].first, last: T.last, chord: T.chord, target: T.first });
         break;
       }
@@ -252,43 +261,74 @@ function runsOf(att: Att[]): Att[][] {
 
 const triad = (root: number, minor: boolean): number[] => [mod12(root), mod12(root + (minor ? 3 : 4)), mod12(root + 7)];
 
-function triadPairs(att: Att[], out: DeviceSpan[]): void {
-  const taken = new Set<number>();
+/** Split attacks into contiguous runs inside one judged chord (triad pairs, 6th-diminished lines and superimpositions live inside one chord). */
+function chordRuns(att: Att[]): Att[][] {
+  const out: Att[][] = [];
   for (const run of runsOf(att)) {
-    if (run.length < 6) continue;
+    let cur: Att[] = [];
+    for (const a of run) {
+      if (cur.length && cur[0].chord !== a.chord) { out.push(cur); cur = []; }
+      cur.push(a);
+    }
+    if (cur.length) out.push(cur);
+  }
+  return out;
+}
+
+/** Number of distinct pitch classes of a window that are not in a set of chord-relative pitch classes. */
+const outsideOf = (w: Att[], inside: (rel: number) => boolean): number => new Set(w.filter(a => !inside(a.rel)).map(a => a.rel)).size;
+
+function triadPairs(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]): void {
+  for (const seg of chordRuns(att)) {
+    if (seg.length < 6) continue;
+    const q = chords[seg[0].chord].quality;
+    const cands: { s: number; e: number; score: number }[] = [];
+    // major and minor pairs are judged together: the best (longest) window wins where they overlap
     for (const minor of [false, true]) {
       for (let r = 0; r < 12; r++) {
         const A = triad(r, minor);
         const B = triad(r + 2, minor);
         const which = (pc: number): 0 | 1 | -1 => (A.includes(pc) ? 0 : B.includes(pc) ? 1 : -1);
         let s = 0;
-        while (s < run.length) {
-          if (which(mod12(run[s].midi)) < 0) { s++; continue; }
+        while (s < seg.length) {
+          if (which(mod12(seg[s].midi)) < 0) { s++; continue; }
           let e = s;
-          while (e + 1 < run.length && which(mod12(run[e + 1].midi)) >= 0) e++;
-          if (e - s + 1 >= 6 && !run.slice(s, e + 1).some(a => taken.has(a.first))) {
-            const w = run.slice(s, e + 1);
+          while (e + 1 < seg.length && which(mod12(seg[e + 1].midi)) >= 0) e++;
+          const w = seg.slice(s, e + 1);
+          if (w.length >= 6) {
             const cnt = [0, 0];
             const pcs: Set<number>[] = [new Set(), new Set()];
             let switches = 0;
             let leaps = 0;
+            let big = 0;
             w.forEach((a, i) => {
               const g = which(mod12(a.midi)) as 0 | 1;
               cnt[g]++;
               pcs[g].add(mod12(a.midi));
               if (i > 0) {
                 if (which(mod12(w[i - 1].midi)) !== g) switches++;
-                if (Math.abs(a.midi - w[i - 1].midi) >= 3) leaps++;
+                const iv = Math.abs(a.midi - w[i - 1].midi);
+                if (iv >= 3) leaps++;
+                if (iv >= 4) big++;
               }
             });
-            if (cnt[0] >= 3 && cnt[1] >= 3 && pcs[0].size === 3 && pcs[1].size === 3 && switches >= 1 && leaps >= (w.length - 1) / 2) {
-              out.push({ kind: 'triadPair', first: w[0].first, last: w[w.length - 1].last, chord: w[0].chord });
-              for (const a of w) taken.add(a.first);
+            const fast = w.filter(a => a.end - a.start <= TPB / 2).length;
+            // not a scale that happens to sit in six pitch classes: >= 2 pitch classes beyond the chord tones and the 9th
+            const outside = outsideOf(w, rel => isTone(q, rel) || rel === 2);
+            if (cnt[0] >= 3 && cnt[1] >= 3 && pcs[0].size === 3 && pcs[1].size === 3 && switches >= 1 && leaps >= 0.65 * (w.length - 1) && big >= 2 && fast >= 0.75 * w.length && outside >= 2) {
+              cands.push({ s: seg[s].first, e: seg[e].last, score: w.length * 100 + leaps });
             }
           }
           s = e + 1;
         }
       }
+    }
+    cands.sort((a, b) => b.score - a.score);
+    const kept: { s: number; e: number }[] = [];
+    for (const c of cands) {
+      if (kept.some(k => c.s <= k.e && c.e >= k.s)) continue;
+      kept.push(c);
+      out.push({ kind: 'triadPair', first: c.s, last: c.e, chord: seg[0].chord });
     }
   }
 }
@@ -296,21 +336,33 @@ function triadPairs(att: Att[], out: DeviceSpan[]): void {
 const SIXTH_DIM_MAJ = [0, 2, 4, 5, 7, 8, 9, 11];
 const SIXTH_DIM_MIN = [0, 2, 3, 5, 7, 8, 9, 11];
 
+/** b follows a by one degree of the 8-note scale (no degree skipped), whatever the direction. */
+function scaleStep(scale: readonly number[], a: Att, b: Att): boolean {
+  const d = b.midi - a.midi;
+  if (d === 0 || Math.abs(d) > 2) return false;
+  const ia = scale.indexOf(a.rel);
+  const ib = scale.indexOf(b.rel);
+  if (ia < 0 || ib < 0) return false;
+  return (((ib - ia) % 8) + 8) % 8 === (d > 0 ? 1 : 7);
+}
+
 function sixthDims(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]): void {
-  for (const run of runsOf(att)) {
+  for (const seg of chordRuns(att)) {
+    const q = chords[seg[0].chord].quality;
+    const scale = q === 'maj7' ? SIXTH_DIM_MAJ : q === 'm6' || q === 'mMaj7' ? SIXTH_DIM_MIN : null;
+    if (!scale) continue;
+    const sixth = q === 'maj7' ? [0, 4, 7, 9] : [0, 3, 7, 9]; // R 3 5 6: the 6th chord, which sits on the beats
     let s = 0;
-    while (s < run.length) {
-      const q = chords[run[s].chord].quality;
-      const scale = q === 'maj7' ? SIXTH_DIM_MAJ : q === 'm6' || q === 'mMaj7' ? SIXTH_DIM_MIN : null;
-      if (!scale || !scale.includes(run[s].rel)) { s++; continue; }
+    while (s < seg.length) {
+      if (!scale.includes(seg[s].rel)) { s++; continue; }
       let e = s;
-      while (e + 1 < run.length && run[e + 1].chord === run[s].chord && scale.includes(run[e + 1].rel)) e++;
-      const w = run.slice(s, e + 1);
-      if (w.length >= 6 && w.some(a => a.rel === 8)) {
-        const steps = w.slice(1).filter((a, i) => Math.abs(a.midi - w[i].midi) <= 2).length;
-        const sixth = q === 'maj7' ? [0, 4, 7, 9, 11] : [0, 3, 7, 9, 11];
+      while (e + 1 < seg.length && scaleStep(scale, seg[e], seg[e + 1])) e++;
+      const w = seg.slice(s, e + 1);
+      if (w.length >= 6 && w.some(a => a.rel === 8) && w.some(a => a.rel === 9)) {
         const beats = w.filter(a => a.start % TPB === 0);
-        if (steps >= 0.6 * (w.length - 1) && sixth.includes(w[0].rel) && (!beats.length || beats.filter(a => sixth.includes(a.rel)).length >= beats.length / 2)) {
+        const good = beats.filter(a => sixth.includes(a.rel)).length;
+        const maj7s = beats.filter(a => a.rel === 11).length;
+        if (beats.length >= 2 && good >= 0.75 * beats.length && maj7s <= 1) {
           out.push({ kind: 'sixthDim', first: w[0].first, last: w[w.length - 1].last, chord: w[0].chord });
         }
       }
@@ -325,57 +377,52 @@ const D7 = [0, 4, 7, 10];
 
 function superimpositions(att: Att[], chords: readonly LickChord[], out: DeviceSpan[]): void {
   const taken = new Set<number>();
-  for (const run of runsOf(att)) {
-    // split by chord: a superimposition lives inside one chord
-    const byChord: Att[][] = [];
-    for (const a of run) {
-      const last = byChord[byChord.length - 1];
-      if (last && last[0].chord === a.chord) last.push(a); else byChord.push([a]);
-    }
-    for (const seg of byChord) {
-      if (seg.length < 4) continue;
-      const ch = chords[seg[0].chord];
-      const mark = (w: Att[]): void => {
-        out.push({ kind: 'superimposition', first: w[0].first, last: w[w.length - 1].last, chord: w[0].chord });
-        for (const a of w) taken.add(a.first);
-      };
-      // (a) a ii-V a fourth apart: the m7 first, then the 7
-      for (let r = 0; r < 12; r++) {
-        if (r === ch.rootPc) continue;
-        const ii = pcsOf(r, M7);
-        const v = pcsOf(r + 5, D7);
-        const pc = (i: number): number => mod12(seg[i].midi);
-        for (let k = 2; k + 2 <= seg.length; k++) {
-          let s = k;
-          while (s > 0 && ii.has(pc(s - 1))) s--;
-          let e = k - 1;
-          while (e + 1 < seg.length && v.has(pc(e + 1))) e++;
-          if (k - s < 2 || e - k + 1 < 2 || seg.slice(s, e + 1).some(a => taken.has(a.first))) continue;
-          const L = new Set(seg.slice(s, k).map(a => mod12(a.midi)));
-          const R = new Set(seg.slice(k, e + 1).map(a => mod12(a.midi)));
-          const iiOnly = [...L].filter(p => !v.has(p)).length;
-          const vOnly = [...R].filter(p => !ii.has(p)).length;
-          const w = seg.slice(s, e + 1);
-          const leaps = w.slice(1).filter((a, i) => Math.abs(a.midi - w[i].midi) >= 3).length;
-          if (L.size >= 3 && R.size >= 3 && iiOnly >= 2 && vOnly >= 2 && leaps >= (w.length - 1) / 2) { mark(w); break; }
-        }
+  for (const seg of chordRuns(att)) {
+    if (seg.length < 4) continue;
+    const ch = chords[seg[0].chord];
+    const mark = (w: Att[]): void => {
+      out.push({ kind: 'superimposition', first: w[0].first, last: w[w.length - 1].last, chord: w[0].chord });
+      for (const a of w) taken.add(a.first);
+    };
+    // genuinely outside: at least 2 pitch classes beyond the chord's parent scale
+    const outsideScale = (w: Att[]): boolean => outsideOf(w, rel => CHORDS[ch.quality].scale.some(t => mod12(t) === rel)) >= 2;
+    // (a) a ii-V a fourth apart: the m7 first, then the 7. Not the chord's own ii-V (Gm7-C7 over C7, Dm7-G7 over Cmaj7) nor the
+    // m7 a fifth above the root (an upper structure: Gm7 over C7, Am7 over Dm7).
+    for (let r = 0; r < 12; r++) {
+      if (r === ch.rootPc || r === mod12(ch.rootPc + 7) || (ch.quality === 'maj7' && r === mod12(ch.rootPc + 2))) continue;
+      const ii = pcsOf(r, M7);
+      const v = pcsOf(r + 5, D7);
+      const pc = (i: number): number => mod12(seg[i].midi);
+      for (let k = 2; k + 2 <= seg.length; k++) {
+        let s = k;
+        while (s > 0 && ii.has(pc(s - 1))) s--;
+        let e = k - 1;
+        while (e + 1 < seg.length && v.has(pc(e + 1))) e++;
+        if (k - s < 2 || e - k + 1 < 2 || seg.slice(s, e + 1).some(a => taken.has(a.first))) continue;
+        const L = new Set(seg.slice(s, k).map(a => mod12(a.midi)));
+        const R = new Set(seg.slice(k, e + 1).map(a => mod12(a.midi)));
+        const iiOnly = [...L].filter(p => !v.has(p)).length;
+        const vOnly = [...R].filter(p => !ii.has(p)).length;
+        const w = seg.slice(s, e + 1);
+        const leaps = w.slice(1).filter((a, i) => Math.abs(a.midi - w[i].midi) >= 3).length;
+        if (L.size >= 3 && R.size >= 3 && iiOnly >= 2 && vOnly >= 2 && leaps >= (w.length - 1) / 2 && outsideScale(w)) { mark(w); break; }
       }
-      // (b) the dominant a tritone away, over a dominant chord
-      if (ch.quality === 'dom7' || ch.quality === 'dom7alt') {
-        const sub = pcsOf(ch.rootPc + 6, D7);
-        let s = 0;
-        while (s < seg.length) {
-          if (!sub.has(mod12(seg[s].midi))) { s++; continue; }
-          let e = s;
-          while (e + 1 < seg.length && sub.has(mod12(seg[e + 1].midi))) e++;
-          const w = seg.slice(s, e + 1);
-          if (w.length >= 4 && !w.some(a => taken.has(a.first))) {
-            const used = new Set(w.map(a => mod12(a.midi)));
-            const outside = [...used].filter(p => !isTone(ch.quality, mod12(p - ch.rootPc))).length;
-            if (used.size >= 3 && outside >= 2) mark(w);
-          }
-          s = e + 1;
+    }
+    // (b) the dominant a tritone away, over a dominant chord
+    if (ch.quality === 'dom7' || ch.quality === 'dom7alt') {
+      const sub = pcsOf(ch.rootPc + 6, D7);
+      let s = 0;
+      while (s < seg.length) {
+        if (!sub.has(mod12(seg[s].midi))) { s++; continue; }
+        let e = s;
+        while (e + 1 < seg.length && sub.has(mod12(seg[e + 1].midi))) e++;
+        const w = seg.slice(s, e + 1);
+        if (w.length >= 4 && !w.some(a => taken.has(a.first))) {
+          const used = new Set(w.map(a => mod12(a.midi)));
+          const outside = [...used].filter(p => !isTone(ch.quality, mod12(p - ch.rootPc))).length;
+          if (used.size >= 3 && outside >= 2 && outsideScale(w)) mark(w);
         }
+        s = e + 1;
       }
     }
   }
@@ -419,7 +466,7 @@ export function detectDevices(lick: Pick<Lick, 'notes' | 'chords'>, kinds?: read
   if (want('chromatic')) chromatics(att, chords, out);
   if (want('guideTone')) guideTones(att, chords, out);
   if (want('anticipation')) anticipations(att, out);
-  if (want('triadPair')) triadPairs(att, out);
+  if (want('triadPair')) triadPairs(att, chords, out);
   if (want('sixthDim')) sixthDims(att, chords, out);
   if (want('superimposition')) superimpositions(att, chords, out);
   if (want('sideSlip')) sideSlips(att, chords, out);

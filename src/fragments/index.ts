@@ -1,5 +1,5 @@
 import type { ChordQualityId, FragTag, Fragment } from '../types';
-import { TICKS_PER_16TH } from '../types';
+import { TICKS_PER_16TH, TPBAR } from '../types';
 import { SEED_FRAGMENTS } from './lib/seed';
 import { PROTOTYPE_FRAGMENTS } from './lib/prototype';
 import { ORIGINAL_FRAGMENTS } from './lib/original';
@@ -9,8 +9,6 @@ import { ADVANCED_FRAGMENTS } from './lib/advanced';
 import { PHASE2B_FRAGMENTS } from './lib/phase2b';
 import { FOCUS_FRAGMENTS } from './lib/focus';
 import { parseNotes } from './lib/notation';
-import { CHORDS } from '../theory/chords';
-import { mod12 } from '../theory/pitch';
 import { detectDevices, type DeviceKind } from '../theory/devices';
 
 /**
@@ -95,13 +93,11 @@ export const VOCABULARY_FRAGMENTS: Fragment[] = [...VOCAB_FRAGMENTS, ...ADVANCED
 /**
  * Focus tags are derived from the notes, so they cannot drift from what the Analyze view finds (src/theory/devices.ts):
  *  - enclosure / chromatic / triad-pair / sixth-dim / superimposition: the detector fires on the cell over one of its chords;
- *  - anticipation-target: an ending cell whose first note is a chord tone of every quality it serves (the note that can be
- *    attacked an eighth early and tied across the bar line into the final tonic).
  * Only adds tags, never removes one; the input is not mutated.
  */
 export function withDeviceTags(f: Fragment): Fragment {
   const add = new Set<FragTag>();
-  let t = 0;
+  let t = TPBAR; // the cell sits one bar into a chord, so its first note is not "the start of a chord"
   const timed = f.notes.map(n => { const r = { rel: n.rel, start: t, dur: n.dur, tie: n.tie }; t += n.dur; return r; });
   const seen = new Map<DeviceKind, number>();
   for (const q of f.qualities) {
@@ -114,8 +110,7 @@ export function withDeviceTags(f: Fragment): Fragment {
   if (all('triadPair')) add.add('triad-pair');
   if (all('sixthDim')) add.add('sixth-dim');
   if (all('superimposition') || all('sideSlip')) add.add('superimposition');
-  const first = f.notes.find(n => n.rel != null)?.rel;
-  if (f.ending && first != null && f.qualities.every(q => CHORDS[q].tones.some(x => mod12(x) === mod12(first)))) add.add('anticipation-target');
+
   const fresh = [...add].filter(x => !f.tags.includes(x));
   return fresh.length ? { ...f, tags: [...f.tags, ...fresh] } : f;
 }

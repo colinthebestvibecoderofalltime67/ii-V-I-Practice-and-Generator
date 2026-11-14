@@ -1,7 +1,8 @@
 import type { LickChord, LickNote } from '../types';
 import { TICKS_PER_16TH, TPBAR } from '../types';
 import { isTupletDur, splitDur } from '../theory/rhythm';
-import { CHORDS, isChordToneOrTension } from '../theory/chords';
+import { CHORDS, inScale, isChordToneOrTension } from '../theory/chords';
+import type { Rng } from './rng';
 import { mod12 } from '../theory/pitch';
 
 /**
@@ -187,4 +188,134 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     }
   }
   return changed;
+}
+
+/* ------------------------------ phrasing pass ------------------------------ */
+
+const EIGHTH = 2 * TICKS_PER_16TH;
+const hasTuplet = (e: Ev): boolean => e.pieces.some(isTupletDur);
+
+/** Remove events[i], keeping the cell-start indexes (positions in `events`) consistent. */
+function removeEvent(events: Ev[], fragStarts: number[], i: number): void {
+  events.splice(i, 1);
+  for (let k = 0; k < fragStarts.length; k++) if (fragStarts[k] > i) fragStarts[k]--;
+}
+
+/** Index of the nearest sounding event before i, or -1. */
+function soundingIdxBefore(events: Ev[], i: number): number {
+  for (let j = i - 1; j >= 0; j--) if (events[j].midi != null) return j;
+  return -1;
+}
+
+/**
+ * Seam repair: where a cell's first attack repeats the pitch the previous cell just ended on, move the previous
+ * cell's last note to a neighbouring scale tone (smoothest option), or, failing that, tie the two together.
+ * Never touches triplets; a note on a chord start stays a chord tone or tension.
+ */
+export function fixSeams(events: Ev[], fragStarts: number[], chords: LickChord[], range: [number, number]): number {
+  let changed = 0;
+  const startTicks = new Set(chords.map(c => c.start));
+  for (let f = 1; f < fragStarts.length; f++) {
+    const k = fragStarts[f];
+    if (k <= 0 || k >= events.length) continue;
+    const cur = events[k];
+    const prev = events[k - 1];
+    if (cur.midi == null || prev.midi == null || cur.midi !== prev.midi || hasTuplet(cur) || hasTuplet(prev)) continue;
+    const before = soundingIdxBefore(events, k - 1);
+    const beforeMidi = before >= 0 ? (events[before].midi as number) : null;
+    const ch = chords[chordIndexAt(chords, prev.start)];
+    const onStart = startTicks.has(prev.start);
+    let best: number | null = null;
+    let bestC = Infinity;
+    for (const d of onStart ? [] : [-2, -1, 1, 2]) {
+      const p = (prev.midi as number) + d;
+      if (p < range[0] || p > range[1] || p === cur.midi || p === beforeMidi) continue;
+      if (!inScale(p, ch.rootPc, ch.quality)) continue;
+      const c = (beforeMidi == null ? 0 : leapPenalty(p - beforeMidi)) + leapPenalty((cur.midi as number) - p) + (Math.abs(d) === 1 ? 0 : 0.05);
+      if (c < bestC) { bestC = c; best = p; }
+    }
+    if (best != null) {
+      prev.midi = best;
+      changed++;
+    } else {
+      // tie the repeat into the previous note (pieces keep the cell boundary, so a chord start stays a note start)
+      prev.pieces.push(...cur.pieces);
+      removeEvent(events, fragStarts, k);
+      changed++;
+      // fragStarts[f] now points at the next event, which still belongs to this cell or the next one
+    }
+  }
+  return changed;
+}
+
+export interface PhrasingOptions {
+  /** Fractional difficulty level 1..4 (Beginner..Expert). */
+  level: number;
+}
+
+const ANTIC_BY_LEVEL = [0.07, 0.38, 0.4, 0.33];
+const lerp4 = (t: readonly number[], level: number): number => {
+  const x = Math.min(3, Math.max(0, level - 1));
+  const i = Math.min(2, Math.floor(x));
+  return t[i] + (t[i + 1] - t[i]) * (x - i);
+};
+
+/**
+ * Bebop phrasing pass, run between planning/joining and eventsToNotes. Mutates `events` and `fragStarts`.
+ *  1. seams: no same-pitch re-attack where two cells join;
+ *  2. anticipations: the chord-tone landing on a chord change is attacked an 8th early and tied across the
+ *     change (the preceding note or rest gives up that 8th);
+ *  3. pickups: the lick may open with a rest (an 8th, a quarter or, at higher levels, a half note) in place of its first notes.
+ * Triplets are never altered and the chord-start / bar-line / range invariants are preserved.
+ */
+export function phraseEvents(
+  rng: Rng, events: Ev[], fragStarts: number[], chords: LickChord[], range: [number, number], opts: PhrasingOptions,
+): void {
+  fixSeams(events, fragStarts, chords, range);
+
+  const pAnt = lerp4(ANTIC_BY_LEVEL, opts.level);
+  for (let ci = 1; ci < chords.length; ci++) {
+    const c = chords[ci];
+    const p = Math.min(0.95, pAnt * (ci === chords.length - 1 ? 1.2 : 0.85));
+    if (!rng.chance(p)) continue;
+    const i = events.findIndex(e => e.start === c.start);
+    if (i < 1) continue;
+    const e = events[i];
+    const prev = events[i - 1];
+    if (e.midi == null || hasTuplet(e) || hasTuplet(prev)) continue;
+    const rel = mod12(e.midi - c.rootPc);
+    if (!CHORDS[c.quality].tones.some(t => mod12(t) === rel) && !CHORDS[c.quality].guide.some(g => mod12(g) === rel)) continue;
+    const last = prev.pieces[prev.pieces.length - 1];
+    if (last < EIGHTH) continue;
+    // the pitch sounding just before the anticipation must differ (no re-attack)
+    const dropsPrev = last === EIGHTH && prev.pieces.length === 1;
+    const lead = dropsPrev ? events[i - 2] : prev;
+    if (lead && lead.midi === e.midi) continue;
+    if (dropsPrev) removeEvent(events, fragStarts, i - 1);
+    else if (last === EIGHTH) prev.pieces.pop();
+    else prev.pieces[prev.pieces.length - 1] = last - EIGHTH;
+    e.start = c.start - EIGHTH;
+    e.pieces = [EIGHTH, ...e.pieces];
+  }
+
+  // pickup: replace the first notes with a rest
+  const pRest = opts.level < 1.5 ? 0.2 : 0.28;
+  if (rng.chance(pRest) && events.length > 2) {
+    const firstChordEnd = chords.length > 1 ? chords[1].start : Infinity;
+    const opt: [number, number][] = [[EIGHTH, 5], [2 * EIGHTH, 4], [4 * EIGHTH, opts.level >= 2.5 ? 1.5 : 0]];
+    const avail = opt.filter(o => o[1] > 0 && o[0] < firstChordEnd);
+    const d = avail.length ? rng.weighted(avail, o => o[1])[0] : null;
+    if (d != null) {
+      let acc = 0;
+      let n = 0;
+      while (n < events.length && acc < d && !hasTuplet(events[n]) && events[n].start === acc) {
+        acc += evDur(events[n]);
+        n++;
+      }
+      if (acc === d && n < events.length && events.slice(n).some(x => x.midi != null)) {
+        events.splice(0, n, { midi: null, start: 0, pieces: [d] });
+        for (let k = 0; k < fragStarts.length; k++) if (fragStarts[k] >= n) fragStarts[k] -= n - 1; else if (k > 0 && fragStarts[k] > 0) fragStarts[k] = 1;
+      }
+    }
+  }
 }

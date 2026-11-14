@@ -506,12 +506,13 @@ export function detectDevices(lick: Pick<Lick, 'notes' | 'chords'>, kinds?: read
 
 /**
  * Devices for display (brackets and the Analysis list): a chromatic approach that is part of an enclosure, and a
- * side-slip inside a superimposition window, are not shown twice.
+ * side-slip inside a superimposition window, are not shown twice (except a chromatic approach under the chromaticApproach Focus,
+ * which is the point of the exercise and is labelled even inside an enclosure).
  */
-export function displayDevices(devs: readonly DeviceSpan[]): DeviceSpan[] {
+export function displayDevices(devs: readonly DeviceSpan[], focus?: ConceptId): DeviceSpan[] {
   const inside = (a: DeviceSpan, b: DeviceSpan): boolean => a !== b && a.first >= b.first && a.last <= b.last;
   return devs.filter(d => {
-    if (d.kind === 'chromatic') return !devs.some(e => (e.kind === 'enclosure' || e.kind === 'sixthDim') && inside(d, e));
+    if (d.kind === 'chromatic') return focus === 'chromaticApproach' || !devs.some(e => (e.kind === 'enclosure' || e.kind === 'sixthDim') && inside(d, e));
     if (d.kind === 'sideSlip') return !devs.some(e => e.kind === 'superimposition' && inside(d, e));
     return true;
   });

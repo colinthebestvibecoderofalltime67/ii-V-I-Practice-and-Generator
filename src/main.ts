@@ -8,7 +8,7 @@ import { generateLick, randomSeed, transposeLick } from './generator';
 import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore, tierHint } from './difficulty/score';
 import { analyzeLick, type LickAnalysis, type NoteKind } from './theory/analyze';
 import { renderLick, type NoteLabel } from './render/notation';
-import { CONCEPTS, CONCEPT_DESC, CONCEPT_NAME, CONCEPT_SHORT, isConceptId } from './theory/devices';
+import { CONCEPTS, CONCEPT_DESC, conceptAllowed, CONCEPT_NAME, CONCEPT_SHORT, isConceptId } from './theory/devices';
 import { deviceRows, focusHint, type DeviceRow } from './ui/devices';
 import { lickFingerings } from './render/tab';
 import { Player, type PassAction, type PlayOptions } from './audio/player';
@@ -1008,7 +1008,7 @@ function updateRecap(): void {
   // the written key, like the title and key menu (alto in concert C reads A)
   const key = settings.key === 'random' ? 'Random key' : keyLabel((settings.key + inst().transpose) % 12, getProgression(settings.progressionId).mode);
   $('fold-recap').textContent =
-    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], ...(settings.focus !== 'any' ? [`Focus: ${CONCEPT_SHORT[settings.focus]}`] : []), instShort(inst()), key, lengthShort(settings.progressionId, settings.length)].join(' · ');
+    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], ...(settings.focus !== 'any' && conceptAllowed(settings.focus, targetTier()) ? [`Focus: ${CONCEPT_SHORT[settings.focus]}`] : []), instShort(inst()), key, lengthShort(settings.progressionId, settings.length)].join(' · ');
 }
 
 function setupPhoneBar(): void {

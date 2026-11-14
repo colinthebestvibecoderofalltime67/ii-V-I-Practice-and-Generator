@@ -615,7 +615,7 @@ export const FOCUS_FRAGMENTS: Fragment[] = [
   f('dom7-foc-sub-06', DOM, 2, 4, 'superimposition', ['arpeggio', 'superimposition'], '4:2 1:2 6:2 10:2'),
   f('m7-foc-slip-09', MIN, 4, 4, 'superimposition', ['chromatic', 'superimposition'], '12:2 7:2 2:1 6:1 11:1 10:1 14:2 19:2 14:2 12:2'),
   f('m7-foc-slip-10', MIN, 2, 3, 'superimposition', ['chromatic', 'superimposition'], '-2:2 2:1 1:1 4:1 8:1 10:2'),
-  f('m7-foc-slip-11', MIN, 2, 3, 'superimposition', ['chromatic', 'superimposition'], '15:2 10:1 16:1 13:1 11:1 10:2'),
+  f('m7-foc-slip-11', MIN, 2, 4, 'superimposition', ['chromatic', 'superimposition'], '15:2 10:1 16:1 13:1 11:1 10:2'),
   f('m7-foc-slip-12', MIN, 2, 4, 'superimposition', ['chromatic', 'superimposition'], '3:2 7:1 11:1 8:1 4:1 3:2'),
   f('m7-foc-slip-13', MIN, 2, 4, 'superimposition', ['chromatic', 'superimposition'], '10:2 14:1 11:1 8:1 4:1 3:2'),
   f('m7-foc-slip-14', MIN, 4, 4, 'superimposition', ['chromatic', 'superimposition'], '19:2 17:2 12:1 11:1 14:1 18:1 19:2 17:2 14:2 9:2'),

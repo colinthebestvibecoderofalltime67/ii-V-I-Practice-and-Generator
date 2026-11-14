@@ -1,5 +1,5 @@
 import type { ConceptId, Instrument, Lick, Tier } from '../types';
-import { TIER_NAMES } from '../types';
+import { TIER_NAMES, TPB } from '../types';
 import { analyzeLick, type LickAnalysis } from '../theory/analyze';
 import { CONCEPT_MIN_TIER, CONCEPT_NAME, DEVICE_LABEL, DEVICE_NAME, conceptAllowed, detectDevices, displayDevices, type DeviceSpan } from '../theory/devices';
 import { barOf } from '../theory/rhythm';
@@ -27,7 +27,7 @@ export interface DeviceRow {
 /** Devices of a lick as rows for the Analysis list, plus the marks the renderer draws. Works on notes only (shared licks too). */
 export function deviceRows(lick: Lick, inst: Instrument, analysis: LickAnalysis = analyzeLick(lick, inst)): DeviceRow[] {
   const spelled = spellLick(lick, inst);
-  return displayDevices(detectDevices(lick)).map(span => {
+  return displayDevices(detectDevices(lick), lick.focus).map(span => {
     const chord = analysis.chords[span.chord]?.symbol ?? '';
     let what = chord ? `over ${chord}` : '';
     if (span.target !== undefined && spelled[span.target]) {
@@ -35,7 +35,11 @@ export function deviceRows(lick: Lick, inst: Instrument, analysis: LickAnalysis 
       const word = DEGREE_WORD[label] ?? label;
       what = `→ ${formatSpelling(spelled[span.target]!)}${word && chord ? ` (${word} of ${chord})` : ''}`;
     }
-    if (span.kind === 'anticipation') what += ', a beat early';
+    if (span.kind === 'anticipation') {
+      // how early the note really is: the distance from its attack to the chord change
+      const early = lick.chords[span.chord].start - lick.notes[span.first].start;
+      what += early === TPB / 2 ? ', an eighth early' : early === TPB ? ', a beat early' : early > 0 ? `, ${early} ticks early` : '';
+    }
     if (span.kind === 'sideSlip') what = `over ${chord}, resolving by step`;
     return {
       span, name: DEVICE_NAME[span.kind], what, where: `bar ${barOf(lick.notes[span.first].start) + 1}`,

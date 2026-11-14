@@ -8,9 +8,11 @@ import { keySignatureName, keyUsesSharps, mod12 } from './pitch';
  * A pitch is spelled as letter + accidental. Three layers, all driven by the chord a note sits over:
  *  1. Key: the tonic is spelled as the key signature names it (keySignatureName; F♯ vs G♭ etc. unchanged).
  *  2. Chord root: letter = tonic letter + degree step (ii = 2nd letter, V = 5th, ♭II = 2nd, ♭VII = 7th, iv = 4th);
- *     if that spelling needs double accidentals inside the chord's scale, a clean enharmonic root is used instead.
+ *     diatonic roots (I, ii, V) always keep it; a borrowed root that is awkward (E𝄫, C♭, F♭) uses the enharmonic one.
  *  3. Note: letter = root letter + the chord-degree step of the note (3rd = 3rd letter ...); notes that are not
- *     chord/scale degrees ("chromatic") take sharp-of-lower when rising, flat-of-upper when falling.
+ *     chord tones (and the minor tonic's leading tone) keep their letter even with 𝄪/𝄫; tensions needing a double
+ *     accidental move to a neighbouring letter; notes that are not scale degrees ("chromatic") take
+ *     sharp-of-lower when rising, flat-of-upper when falling.
  */
 
 export type Letter = 'C' | 'D' | 'E' | 'F' | 'G' | 'A' | 'B';
@@ -53,14 +55,22 @@ const STEPS: Record<ChordQualityId, (number | null)[]> = {
   mMaj7: [0, null, 1, 2, null, 3, null, 4, null, 5, null, 6],
 };
 
+const isWeird = (s: Spelled): boolean =>
+  (s.acc === 1 && (s.letter === 'B' || s.letter === 'E')) || (s.acc === -1 && (s.letter === 'C' || s.letter === 'F'));
+
 /**
- * Spell the degree `step` letters above the root. Chord tones always keep their letter; any other degree that would
- * need a double accidental (e.g. the ♭5 of E♭7alt = B𝄫) moves to the neighbouring letter (A) instead.
+ * Spell the degree `step` letters above the root.
+ *  - Chord tones always keep their letter, even with a double accidental (F𝄪 = 3rd of D♯7alt).
+ *  - So does the leading tone (major 7th) of the minor-tonic chords m6 / mMaj7 (F𝄪 in G♯m6): it defines the key.
+ *  - Any other scale tone (tension) that would need a double accidental, or the ♯9 of an altered chord when
+ *    written as a ♭3 would be F♭/C♭, moves to the neighbouring letter (D♭7alt: ♭9 D, ♯9 E, ♭5 G, ♭13 A).
  */
 function degree(root: Spelled, quality: ChordQualityId, step: number, pc: number): Spelled {
   const ri = letterIdx(root.letter);
   const s = onLetter(ri + step, pc);
-  if (Math.abs(s.acc) <= 1 || CHORDS[quality].tones.includes(mod12(pc - spelledPc(root)))) return s;
+  const rel = mod12(pc - spelledPc(root));
+  if (CHORDS[quality].tones.includes(rel) || (rel === 11 && (quality === 'm6' || quality === 'mMaj7'))) return s;
+  if (Math.abs(s.acc) <= 1 && !(quality === 'dom7alt' && rel === 3 && isWeird(s))) return s;
   for (const d of [-1, 1]) {
     const alt = onLetter(ri + step + d, pc);
     if (Math.abs(alt.acc) <= 1) return alt;
@@ -74,20 +84,20 @@ export function spellScale(root: Spelled, quality: ChordQualityId): Spelled[] {
   return CHORDS[quality].scale.map(rel => degree(root, quality, STEPS[quality][mod12(rel)] as number, rpc + rel));
 }
 
-const isWeird = (s: Spelled): boolean =>
-  (s.acc === 1 && (s.letter === 'B' || s.letter === 'E')) || (s.acc === -1 && (s.letter === 'C' || s.letter === 'F'));
-
 /**
- * Root of a chord in a key. Functional spelling first (tritone sub = ♭II, backdoor = ♭VII / iv); when that makes
- * the chord's scale need double accidentals (e.g. ♭II7 in D♭ = E𝄫7), the cleaner enharmonic root wins.
- * The tonic chord always keeps the key's own spelling.
+ * Root of a chord in a key. Functional spelling first (tritone sub = ♭II, backdoor = ♭VII / iv); when a borrowed
+ * root is awkward (♭II7 in D♭ = E𝄫7, iv in G♭ = C♭m7, ♭VII7 in G♭ = F♭7) or needs doubles, the cleaner enharmonic root
+ * wins. Diatonic roots (I, ii, V) never change.
  */
 export function spellChordRoot(rootPc: number, quality: ChordQualityId, keyPc: number, mode: Mode = 'major'): Spelled {
   const tonic = spellKeyTonic(keyPc, mode);
   const deg = mod12(rootPc - keyPc);
   const fi = letterIdx(tonic.letter) + DEGREE_STEP[deg];
   const functional = onLetter(fi, rootPc);
-  if (deg === 0) return functional;
+  // Diatonic functional roots (I/i, ii, V) always keep the key's letters, whatever double accidental a chord tone
+  // then needs (D♯7alt in G♯ minor). Only a borrowed root (♭II, iv, ♭VII ...) may move to an enharmonic
+  // neighbour, when its own spelling is awkward (E𝄫, C♭, F♭, E♯, B♯) or its chord tones would need doubles (G♭m7 → F♯m7).
+  if (deg === 0 || deg === 2 || deg === 7) return functional;
   let best = functional;
   let bestScore = Infinity;
   for (const idx of [fi, fi - 1, fi + 1]) {
@@ -102,11 +112,12 @@ export function spellChordRoot(rootPc: number, quality: ChordQualityId, keyPc: n
 
 export type SpellStyle = 'unicode' | 'ascii' | 'vex';
 
-/** "E♭", "F♯" (unicode); "Eb", "F#" (ascii); "eb/4" (vex; octave appended for a SpelledNote). */
+/** "E♭", "F♯", "F𝄪" (unicode); "Eb", "F#", "F##" (ascii); "eb/4", "f##/5" (vex; octave appended for a SpelledNote). */
 export function formatSpelling(s: Spelled | SpelledNote, style: SpellStyle = 'unicode'): string {
   const n = Math.abs(s.acc);
-  const sym = s.acc > 0 ? (style === 'unicode' ? '♯' : '#') : style === 'unicode' ? '♭' : 'b';
-  const acc = sym.repeat(n);
+  let acc: string;
+  if (style === 'unicode') acc = n === 2 ? (s.acc > 0 ? '𝄪' : '𝄫') : (s.acc > 0 ? '♯' : '♭').repeat(n);
+  else acc = (s.acc > 0 ? '#' : 'b').repeat(n); // VexFlow 4: "f##/5", "bbb/4"
   if (style === 'vex') return s.letter.toLowerCase() + acc + ('octave' in s ? '/' + s.octave : '');
   return s.letter + acc;
 }

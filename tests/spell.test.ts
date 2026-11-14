@@ -64,6 +64,21 @@ describe('chord roots by function', () => {
   });
 });
 
+describe('G♯ minor', () => {
+  it('V is D♯7alt, not E♭7alt (alto sax, concert B minor)', () => {
+    expect(rootsOf('minor-251', 11, getInstrument('alto-sax'))).toEqual(['A♯', 'D♯', 'G♯']);
+    expect(chordSymbols('minor-251', 11, getInstrument('alto-sax'))).toEqual(['A♯m7♭5', 'D♯7alt', 'G♯m6']);
+  });
+  it('double accidentals format for unicode, ascii and VexFlow', () => {
+    const f = { letter: 'F', acc: 2, octave: 4 } as const;
+    expect(formatSpelling(f)).toBe('F𝄪');
+    expect(formatSpelling(f, 'ascii')).toBe('F##');
+    expect(formatSpelling(f, 'vex')).toBe('f##/4');
+    expect(formatSpelling({ letter: 'B', acc: -2, octave: 4 }, 'vex')).toBe('bbb/4');
+    expect(formatSpelling({ letter: 'B', acc: -2 })).toBe('B𝄫');
+  });
+});
+
 describe('scales', () => {
   it('review examples', () => {
     expect(names(spellScale(sp('A'), 'm6'))).toEqual(['A', 'B', 'C', 'D', 'E', 'F♯', 'G♯']);
@@ -73,6 +88,9 @@ describe('scales', () => {
     expect(names(spellScale(sp('F'), 'dom7'))).toEqual(['F', 'G', 'A', 'B♭', 'C', 'D', 'E♭']);
     expect(names(spellScale(sp('Gb'), 'maj7'))).toEqual(['G♭', 'A♭', 'B♭', 'C♭', 'D♭', 'E♭', 'F']);
     expect(names(spellScale(sp('F'), 'm7b5'))).toEqual(['F', 'G♭', 'A♭', 'B♭', 'C♭', 'D♭', 'E♭']);
+    expect(names(spellScale(sp('G#'), 'm6'))).toEqual(['G♯', 'A♯', 'B', 'C♯', 'D♯', 'E♯', 'F𝄪']);
+    expect(names(spellScale(sp('D#'), 'dom7alt'))).toEqual(['D♯', 'E', 'F♯', 'F𝄪', 'A', 'B', 'C♯']);
+    expect(names(spellScale(sp('Db'), 'dom7alt'))).toEqual(['D♭', 'D', 'E', 'F', 'G', 'A', 'C♭']); // tensions avoid doubles
   });
   it('analyze panel uses the sheet spelling (A minor)', () => {
     const l = mkLick('minor-251', 9, new Array(12).fill(69));
@@ -97,6 +115,8 @@ describe('note spelling', () => {
     expect(at('G', 'm7', 70)).toBe('B♭4'); // backdoor in D
     expect(at('F', 'm7b5', 59)).toBe('C♭4'); // E♭ minor: b5 of Fø (B3 sounds, C♭4 written)
     expect(at('F', 'm7b5', 71)).toBe('C♭5');
+    expect(at('G#', 'm6', 67)).toBe('F𝄪4'); // leading tone of G♯ minor keeps its letter
+    expect(at('D#', 'dom7alt', 67)).toBe('F𝄪4'); // 3rd of D♯7alt
   });
   it('chromatic notes by direction', () => {
     expect(at('C', 'maj7', 66, 'up')).toBe('F♯4');
@@ -137,6 +157,7 @@ describe('sweep', () => {
     let notes = 0;
     let licks = 0;
     const doubleCases = new Set<string>();
+    const noteDoubleKeys = new Set<string>();
     const bad: string[] = [];
     for (const p of PROGRESSIONS) {
       for (const length of Object.keys(LENGTHS) as LengthId[]) {
@@ -153,13 +174,12 @@ describe('sweep', () => {
               sc.forEach((s, i) => expect(spelledPc(s), label).toBe(mod12(c.rootPc + inst.transpose + CHORDS[c.quality].scale[i])));
               const letters = new Set(sc.map(s => s.letter));
               if (c.quality === 'dom7alt') { if (letters.size < 5) bad.push(`${label} alt letters ${names(sc)}`); } // altered: the 3rd shares a letter with the ♯9; a double accidental is replaced by a neighbouring letter
-              else if (letters.size !== 7) {
-                // only the tonic m6 of G♯ minor: its 7th would be F𝄪, written as G natural instead
-                if (c.quality === 'm6' && formatSpelling(root) === 'G♯') scaleRepeats++;
-                else bad.push(`${label} ${c.quality} ${names(sc)}`);
-              }
+              else if (letters.size !== 7) { scaleRepeats++; bad.push(`${label} ${c.quality} ${names(sc)}`); }
               const dbl = sc.filter(s => Math.abs(s.acc) > 1);
-              if (dbl.length) { scaleDoubles += dbl.length; doubleCases.add(`${label} ${formatSpelling(root)}${c.quality}`); }
+              if (dbl.length) {
+                scaleDoubles += dbl.length;
+                doubleCases.add(`${p.mode} written key ${keySignatureName(wk, p.mode)}: ${formatSpelling(root)}${c.quality} -> ${names(sc).join(' ')}`);
+              }
             }
             // (b) generated licks
             {
@@ -179,7 +199,7 @@ describe('sweep', () => {
                   // spelled pitch equals the written pitch
                   const midi = ({ C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 } as Record<string, number>)[s!.letter] + s!.acc + 12 * (s!.octave + 1);
                   expect(midi, label).toBe(n.midi + inst.transpose);
-                  if (Math.abs(s!.acc) > 1) noteDoubles++;
+                  if (Math.abs(s!.acc) > 1) { noteDoubles++; noteDoubleKeys.add(`${p.mode} ${keySignatureName(wk, p.mode)}`); }
                   const c = lick.chords[n.chord];
                   const wroot = spellChordRoot(mod12(c.rootPc + inst.transpose), c.quality, wk, p.mode);
                   const rel = mod12(n.midi - c.rootPc);
@@ -200,9 +220,11 @@ describe('sweep', () => {
       }
     }
     // eslint-disable-next-line no-console
-    console.log(`sweep: ${licks} licks, ${notes} notes; scale doubles ${scaleDoubles} (${doubleCases.size} chord cases), note doubles ${noteDoubles}, scale letter repeats ${scaleRepeats}`);
-    if (doubleCases.size) console.log([...doubleCases].slice(0, 12).join('\n')); // eslint-disable-line no-console
+    console.log(`sweep: ${licks} licks, ${notes} notes; scale doubles ${scaleDoubles} (${doubleCases.size} distinct cases), note doubles ${noteDoubles} in ${[...noteDoubleKeys].join(', ')}, scale letter repeats ${scaleRepeats}`);
+    console.log([...doubleCases].join('\n')); // eslint-disable-line no-console
     expect(bad).toEqual([]);
-    expect(scaleRepeats).toBe(45); // G♯ minor tonic only (see above)
+    // double accidentals only ever appear in G♯ minor (D♯7alt's F𝄪, G♯m6's F𝄪) and the odd extreme key, never in common keys
+    for (const k of noteDoubleKeys) expect(['minor G#m']).toContain(k);
+    for (const c of doubleCases) expect(c).toMatch(/^minor written key G#m: /);
   }, 120000);
 });

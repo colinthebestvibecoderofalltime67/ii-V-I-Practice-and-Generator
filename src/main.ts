@@ -58,10 +58,10 @@ const SHORT_NAME: Record<string, string> = {
   'backdoor-251': 'Backdoor',
 };
 const TIER_DESC: Record<Tier, string> = {
-  1: 'Quarter notes, chord tones',
-  2: 'Eighth notes, scale and arpeggio',
-  3: 'Enclosures, chromatic approaches',
-  4: '16th-note runs, altered colour',
+  1: 'Guide tones, simple rhythms',
+  2: 'Eighth-note lines, scale and arpeggio',
+  3: 'Enclosures, chromatic approaches, anticipations',
+  4: 'Altered colour, triplets, faster lines',
 };
 
 /** "Imaj7" -> "I", "V7alt" -> "V7alt", "iiø7" -> "iiø", "i6" -> "i". */

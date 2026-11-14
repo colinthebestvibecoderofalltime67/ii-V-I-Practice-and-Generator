@@ -3,7 +3,7 @@ import { CHORDS, inScale, isChordTone } from './chords';
 import { getProgression } from './progressions';
 import { mod12 } from './pitch';
 import { judgedChord } from './rhythm';
-import { chordSymbolText, formatSpelling, spellChordRoot, spellScale } from './spell';
+import { chordSymbolText, formatSpelling, spellChordRoot, spellLick, spellScale } from './spell';
 
 /**
  * Analysis of a lick: scale-degree labels per note and the parent scale of each chord.
@@ -65,8 +65,10 @@ export const prettyNote = (s: string): string => s.replace(/^([A-G])b/, '$1♭')
 export function analyzeLick(lick: Lick, inst: Instrument): LickAnalysis {
   const writtenKey = mod12(lick.keyPc + inst.transpose);
   const def = getProgression(lick.progressionId);
+  const roots = lick.chords.map(c => spellChordRoot(mod12(c.rootPc + inst.transpose), c.quality, writtenKey, lick.mode));
+  const spelled = spellLick(lick, inst);
   const chords: ChordAnalysis[] = lick.chords.map((c, i) => {
-    const root = spellChordRoot(mod12(c.rootPc + inst.transpose), c.quality, writtenKey, lick.mode);
+    const root = roots[i];
     return {
       symbol: chordSymbolText(root, c.quality),
       roman: def.slots[i]?.roman ?? '',
@@ -90,7 +92,29 @@ export function analyzeLick(lick: Lick, inst: Instrument): LickAnalysis {
       const next = lick.notes[j + 1];
       approach = !!next && next.midi != null && Math.abs(next.midi - n.midi) === 1;
     }
-    notes.push({ label: degreeLabel(n.midi, c.rootPc, c.quality), kind, approach });
+    // A chromatic note's label follows how the sheet spells it (G♯ over C reads ♯5, A♭ reads ♭13).
+    const sp = spelled[i];
+    const label = (kind === 'chromatic' && sp && chromaticLabel(sp, roots[judgedChord(lick.notes, i)])) || degreeLabel(n.midi, c.rootPc, c.quality);
+    notes.push({ label, kind, approach });
   });
   return { notes, chords };
+}
+
+const LETTER_ORDER = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+const MAJOR_STEPS = [0, 2, 4, 5, 7, 9, 11];
+const DEGREE_NAME = ['R', '9', '3', '11', '5', '13', '7'];
+
+/**
+ * Degree label of a chromatic note from its spelling: letter distance from the chord root, then ♭/♯ against the major
+ * scale. Returns '' for an altered root letter (players say ♭9, not ♯1), so the caller falls back to the usual name.
+ */
+function chromaticLabel(note: { letter: string; acc: number }, root: { letter: string; acc: number }): string {
+  const step = (LETTER_ORDER.indexOf(note.letter) - LETTER_ORDER.indexOf(root.letter) + 7) % 7;
+  const semis = mod12(MAJOR_STEPS[LETTER_ORDER.indexOf(note.letter)] + note.acc - MAJOR_STEPS[LETTER_ORDER.indexOf(root.letter)] - root.acc);
+  let diff = semis - MAJOR_STEPS[step];
+  if (diff > 6) diff -= 12;
+  if (diff < -6) diff += 12;
+  if (step === 0 && diff !== 0) return '';
+  const acc = diff > 0 ? '♯'.repeat(diff) : '♭'.repeat(-diff);
+  return acc + DEGREE_NAME[step];
 }

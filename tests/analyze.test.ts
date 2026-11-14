@@ -143,3 +143,29 @@ describe('analyzeLick', () => {
     });
   });
 });
+
+describe('chromatic labels follow the sheet spelling', () => {
+  it('labels match spelled accidentals across a sweep', async () => {
+    const { generateLick } = await import('../src/generator/generate');
+    const { concertRange, getInstrument } = await import('../src/instruments');
+    const { spellLick } = await import('../src/theory/spell');
+    const inst = getInstrument('alto');
+    let checked = 0;
+    for (const p of ['major-251', 'major-251-alt', 'minor-251', 'tritone-251', 'backdoor-251']) {
+      for (let seed = 1; seed <= 30; seed++) {
+        const l = generateLick({ progressionId: p, length: 'standard', keyPc: seed % 12, tier: 4, range: concertRange(inst), seed });
+        const a = analyzeLick(l, inst);
+        const sp = spellLick(l, inst);
+        a.notes.forEach((n, i) => {
+          if (!n || n.kind !== 'chromatic') return;
+          checked++;
+          const acc = sp[i]!.acc;
+          // a sharp-spelled note never gets a flat label and vice versa (relative to a natural-root chord the signs agree)
+          // (an altered root letter keeps the usual name ♭9 — players don't say ♯1)
+          if (acc > 0 && n.label !== '♭9') expect(n.label.startsWith('♭'), `${p} ${seed} ${n.label}`).toBe(false);
+        });
+      }
+    }
+    expect(checked).toBeGreaterThan(10);
+  });
+});

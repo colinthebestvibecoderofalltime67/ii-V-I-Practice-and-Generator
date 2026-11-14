@@ -733,7 +733,7 @@ function doRender(container: HTMLElement, lick: Lick, inst: Instrument, opts: Re
         ctx.lineTo(sg.x2, ly);
         ctx.lineTo(sg.x2, ly + (sg.openRight ? 0 : 3));
         ctx.stroke();
-        if (sg.label) ctx.fillText(sg.label, sg.x1, base);
+        if (sg.label) ctx.fillText(sg.label, Math.max(MARGIN, Math.min(sg.x1, layoutW + MARGIN - sg.labelW - 2)), base);
       }
     });
     ctx.restore();

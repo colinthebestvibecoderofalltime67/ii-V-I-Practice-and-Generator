@@ -11,7 +11,7 @@ vi.mock('../src/audio/synth', () => ({
 
 import { Player, type PlayOptions } from '../src/audio/player';
 import { drumEvents } from '../src/audio/drums';
-import { makeTimeline } from '../src/audio/timing';
+import { tickToBeats } from '../src/audio/timing';
 import { generateLick } from '../src/generator';
 import { concertRange, getInstrument } from '../src/instruments';
 import { TPB } from '../src/types';
@@ -58,10 +58,10 @@ describe('Player drums', () => {
     expect(gains.some(g => g.gain.value === 0.4)).toBe(true);
     expect(new Set(calls.drum.map(d => d.out)).size).toBe(1);
     // times: pass 0 starts at 0.15 s (no count-in), spb = 0.25
-    const tl = makeTimeline(lick.notes, { swing: true, straight16: true });
+    // drums swing every beat on the plain grid, whatever the lead does (straight 16ths / triplets don't straighten the ride)
     const ev = drumEvents(lick.totalTicks, { seed: lick.seed * 131 });
     const first = calls.drum.slice(0, per).map(d => d.t);
-    ev.forEach((e, i) => expect(first[i]).toBeCloseTo(0.15 + tl(e.tick) * 0.25, 6));
+    ev.forEach((e, i) => expect(first[i]).toBeCloseTo(0.15 + tickToBeats(e.tick, true) * 0.25, 6));
     // pass 1 begins one pass later, with a different ghost-snare seed
     const passLen = (lick.totalTicks / TPB) * 0.25;
     expect(calls.drum[per].t).toBeCloseTo(0.15 + passLen, 6);

@@ -97,3 +97,32 @@ describe('Store practice + sound settings', () => {
     expect(store.loadSettings()).toMatchObject({ drums: true, drumVolume: 1, metronome24: false });
   });
 });
+
+describe('practice log review fixes', () => {
+  it('clamps corrupted or future lastAt to a real date range', () => {
+    const k = '0123456789abcdef';
+    const log = sanitizePractice({ [k]: { keys: [0], passes: 1, topBpm: 120, lastAt: 1e300 } });
+    expect(log[k].lastAt).toBeLessThanOrEqual(Date.now() + 86_400_000);
+    expect(Number.isNaN(new Date(log[k].lastAt).getTime())).toBe(false);
+  });
+  it('always keeps the entry just recorded when the log is full, even with an older timestamp', () => {
+    let log: Record<string, { keys: number[]; passes: number; topBpm: number; lastAt: number }> = {};
+    for (let i = 0; i < 1000; i++) log[i.toString(16).padStart(16, '0')] = { keys: [0], passes: 1, topBpm: 100, lastAt: 2_000_000_000_000 + i };
+    const key = 'ffffffffffffffff';
+    log = recordPass(log, key, 5, 140, 1_700_000_000_000); // clock moved backwards
+    expect(log[key]).toBeDefined();
+    expect(Object.keys(log).length).toBe(1000);
+  });
+});
+
+describe('floor exit stays inside the target tier (review fix)', () => {
+  it('cello minor-251 long at slider 10 stays Beginner', async () => {
+    const { generateLick } = await import('../src/generator/generate');
+    const { posToScore, tierForScore } = await import('../src/difficulty/score');
+    const { concertRange, concertRangeForLevel, getInstrument } = await import('../src/instruments');
+    const cello = getInstrument('cello');
+    const t = posToScore(10);
+    const l = generateLick({ progressionId: 'minor-251', length: 'long', keyPc: 1, tier: 1, targetScore: t, range: concertRange(cello), comfortRange: concertRangeForLevel(cello, tierForScore(t)), seed: 9041 });
+    expect(l.difficulty.tier).toBe(1);
+  });
+});

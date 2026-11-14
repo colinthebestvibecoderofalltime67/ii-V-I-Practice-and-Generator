@@ -6,11 +6,17 @@
  */
 import { conceptHitRate, sliderError, summarize, type MusicalitySummary } from '../src/analysis/musicality';
 import { CONCEPTS, CONCEPT_MIN_TIER, CONCEPT_NAME } from '../src/theory/devices';
-import { conceptSample, sessionSample } from '../tests/_samples';
-import { TIER_NAMES, type Tier } from '../src/types';
+import { CORE_PROGRESSION_IDS, conceptSample, sessionSample } from '../tests/_samples';
+import { PROGRESSIONS } from '../src/theory/progressions';
+import { TIER_NAMES, type Lick, type Tier } from '../src/types';
 
 // The same builder as the tests (tests/_samples.ts), so the report and the tests cannot drift apart.
-const { all, byTier } = sessionSample({ seeds: Number(process.env.SEEDS ?? 6) });
+// Sampling every progression keeps the classic five's licks identical to the default test sample (they come first, same seeds);
+// the tier tables below cover the classic five, as the test thresholds do, and the per-progression table covers all of them.
+const full = sessionSample({ seeds: Number(process.env.SEEDS ?? 6), progressions: PROGRESSIONS.map(p => p.id) });
+const all = full.all.filter(l => CORE_PROGRESSION_IDS.includes(l.progressionId));
+const byTier: Record<Tier, Lick[]> = { 1: [], 2: [], 3: [], 4: [] };
+for (const l of all) byTier[l.requestedTier].push(l);
 
 const rows: [string, MusicalitySummary][] = [['All', summarize(all)], ...([1, 2, 3, 4] as Tier[]).map(t => [TIER_NAMES[t], summarize(byTier[t])] as [string, MusicalitySummary])];
 
@@ -39,6 +45,13 @@ if (process.env.JSON) {
     const e = m.endingShares;
     console.log(`${name.padEnd(12)} ${pct(m.lydianSharp11Share)} ${pct(m.lydianAlteredShare)} ${pct(m.noodleShare)} ${pct(m.finalSixteenthRunShare)} ${pct(m.anticipationClashShare)}  ${pct(m.altThinShare)}   ${pct(m.m7b5Flat5Share)}   ${pct(m.nearDuplicateShare)}   ${(['R', '3', '5', '7', '9', '6'] as const).map(d => (100 * e[d]).toFixed(0).padStart(3)).join(' ')}`);
   }
+  console.log('\nPer progression (all lengths and tiers)');
+  console.log('Progression      licks  V-guide  chg-guide  leap10  16ths  noodle  endRepeat  nearDup  ending R/3/5/7/9/6');
+  for (const p of PROGRESSIONS) {
+    const m = summarize(full.all.filter(l => l.progressionId === p.id));
+    const e = m.endingShares;
+    console.log(`${p.id.padEnd(15)} ${String(m.licks).padStart(6)} ${pct(m.dominantGuideShare)}  ${pct(m.changeGuideShare)}   ${pct(m.bigLeapShare)} ${pct(m.sixteenthShare)} ${pct(m.noodleShare)}    ${pct(m.endingRepeatShare)}   ${pct(m.nearDuplicateShare)}   ${(['R', '3', '5', '7', '9', '6'] as const).map(d => (100 * e[d]).toFixed(0).padStart(3)).join(' ')}`);
+  }
   console.log('\nantic = licks with an anticipation into a chord change; pickup = starts with a rest; seam = licks that');
   console.log('re-attack the same pitch where two cells join; V-guide = dominant arrivals on the 3rd or 7th;');
   console.log('alt5/13 = natural 5 or 13 on a beat over 7alt, per 1,000 attacks; longChr = chromatic notes held a beat on a beat.');
@@ -47,6 +60,7 @@ if (process.env.JSON) {
   console.log('lyd#11 = tritone/backdoor dominants with #11 and no natural 11; lydAlt = those with a b9/#9/b13; noodle = licks with >6 chord-tone');
   console.log('attacks in a row; 16run = licks with a stepwise 16th run > 4 in the last bar; clash = anticipations outside the old chord scale');
   console.log('(m7b5/7alt/Lydian dom); altThin = 7alt with <2 altered tones and none held; m7b5-b5 = m7b5 chords stating the b5;');
+  console.log('chg-guide = every chord change (not just dominants) arrived on a guide tone of the new chord;');
   console.log('nearDup = adjacent cells sharing first 3 / last 2 pitches; ending = closing-note degree shares.');
   console.log('lyd-11 = tritone/backdoor licks stressing the natural 11 on the dominant; endRepeat = last note repeats the one before.');
   console.log('\nFocus concept hit rate (licks generated with the focus whose notes contain it; guide tones = share of chord changes linked)');

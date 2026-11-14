@@ -204,7 +204,7 @@ export class Library {
       l3.append(keyWheel(st.keys), n, bpm, ago);
       load.append(l3);
     }
-    load.setAttribute('aria-label', `${o.daily ? 'Load lick of the day: ' : 'Load '}${progressionName(lick)} in ${concert}${keyLabel(lick.keyPc, lick.mode)}, ${TIER_NAMES[lick.difficulty.tier]}` + (st ? `, practiced in ${st.keys.length} of 12 keys` : ''));
+    load.setAttribute('aria-label', `${o.daily ? 'Load lick of the day: ' : 'Load '}${progressionName(lick)} in ${concert}${keyLabel(lick.keyPc, lick.mode)}, ${TIER_NAMES[lick.difficulty.tier]}` + (st ? `, practiced in ${st.keys.length} of 12 keys: ${keyNames(st.keys)}` : ''));
     li.appendChild(load);
     return li;
   }

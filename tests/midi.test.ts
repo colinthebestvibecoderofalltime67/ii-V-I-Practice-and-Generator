@@ -159,3 +159,33 @@ describe('lickToMidi feel', () => {
     expect(legacy[2]).toBe(320);
   });
 });
+
+describe('drum track swing (review fix)', () => {
+  it('ride skip notes stay swung (2/3 of the beat) even where the lead plays straight 16ths', async () => {
+    const { generateLick } = await import('../src/generator/generate');
+    const { concertRange, getInstrument } = await import('../src/instruments');
+    const lick = generateLick({ progressionId: 'major-251', length: 'short', keyPc: 3, tier: 4, range: concertRange(getInstrument('alto')), seed: 3 });
+    const bytes = lickToMidi(lick, { bpm: 120, swing: true, straight16: true, comping: true, comp: 'rootless' });
+    // find the drum track (channel 10 note-ons 0x99) and collect absolute times of ride (51) hits
+    let i = 14, times: number[] = [];
+    while (i < bytes.length) {
+      const len = (bytes[i + 4] << 24) | (bytes[i + 5] << 16) | (bytes[i + 6] << 8) | bytes[i + 7];
+      const body = bytes.slice(i + 8, i + 8 + len);
+      let p = 0, t = 0, status = 0;
+      const rides: number[] = [];
+      while (p < body.length) {
+        let d = 0, b: number;
+        do { b = body[p++]; d = (d << 7) | (b & 127); } while (b & 128);
+        t += d;
+        if (body[p] === 0xff) { p += 2; let l = 0; do { b = body[p++]; l = (l << 7) | (b & 127); } while (b & 128); p += l; continue; }
+        if (body[p] & 0x80) status = body[p++];
+        const a = body[p++], v = (status & 0xe0) === 0xc0 || (status & 0xe0) === 0xd0 ? 0 : body[p++];
+        if (status === 0x99 && a === 51 && v > 0) rides.push(t);
+      }
+      if (rides.length) times = rides;
+      i += 8 + len;
+    }
+    expect(times.length).toBeGreaterThan(4);
+    for (const t of times) expect([0, 320]).toContain(t % 480); // on the beat, or the swung "and"
+  });
+});

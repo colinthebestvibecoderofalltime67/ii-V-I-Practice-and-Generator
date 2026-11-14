@@ -4,7 +4,7 @@ import { bassEvents, compEvents, type CompStyle } from './comping';
 import { bass, click, drum, lead, piano } from './synth';
 import { drumEvents } from './drums';
 import { findTupletGroups } from '../theory/rhythm';
-import { makeTimeline, soundingNotes, timelineSpan } from './timing';
+import { makeTimeline, soundingNotes, tickToBeats, timelineSpan } from './timing';
 
 export interface PlayOptions {
   bpm: number; swing: boolean; straight16: boolean; loop: boolean; metronome: boolean; countIn: boolean;
@@ -162,8 +162,10 @@ export class Player {
           click(ctx, buses.met, st + j * spb, !opts.metronome24 && j % 4 === 0);
         }
       }
+      // The drummer swings every beat (2/3 ride skip) whatever the lead does, so drums use the plain swing grid,
+      // not the lead's per-beat timeline (which plays beats straight where the lead has 16ths or triplets).
       if (opts.piano && opts.drums) {
-        for (const e of drumEvents(cur.totalTicks, { seed: cur.seed * 131 + passIndex })) drum(ctx, buses.drums, e.kind, st + tl(e.tick) * spb, e.vel);
+        for (const e of drumEvents(cur.totalTicks, { seed: cur.seed * 131 + passIndex })) drum(ctx, buses.drums, e.kind, st + tickToBeats(e.tick, opts.swing) * spb, e.vel);
       }
       for (const e of compEv) {
         const t = st + tl(e.tick) * spb;

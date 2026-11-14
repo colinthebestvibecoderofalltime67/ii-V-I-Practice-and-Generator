@@ -2,7 +2,7 @@ import './styles.css';
 import type { ConceptId, Instrument, Lick, Tier } from './types';
 import { TIER_NAMES, TPBAR } from './types';
 import { barOf } from './theory/rhythm';
-import { LENGTHS, PROGRESSIONS, getProgression } from './theory/progressions';
+import { LENGTHS, PROGRESSIONS, getProgression, lengthBars } from './theory/progressions';
 import { INSTRUMENTS, concertRange, concertRangeForLevel, getInstrument } from './instruments';
 import { generateLick, randomSeed, transposeLick } from './generator';
 import { FEATURE_MAX, displayScore, posToScore, scoreToPos, tierForScore } from './difficulty/score';
@@ -64,6 +64,9 @@ const SHORT_NAME: Record<string, string> = {
   'minor-251': 'Minor',
   'tritone-251': 'Tritone substitute',
   'backdoor-251': 'Backdoor',
+  'turnaround': 'Turnaround',
+  'chain-36251': 'Circle of fifths',
+  'coltrane': 'Coltrane',
 };
 const TIER_DESC: Record<Tier, string> = {
   1: 'Guide tones, simple rhythms',
@@ -75,7 +78,11 @@ const TIER_DESC: Record<Tier, string> = {
 /** "Imaj7" -> "I", "V7alt" -> "V7alt", "iiø7" -> "iiø", "i6" -> "i". */
 const romanShort = (r: string): string => r.replace(/maj7|7(?!alt)|6/g, '');
 const romansFor = (progressionId: string): string[] => getProgression(progressionId).slots.map(s => romanShort(s.roman));
-const lengthShort = (id: keyof typeof LENGTHS): string => /\((.*)\)/.exec(LENGTHS[id].label)?.[1] ?? LENGTHS[id].label;
+/** "3 bars": the real length of a progression at a length id (progressions of different chord counts differ). */
+const lengthShort = (progressionId: string, id: keyof typeof LENGTHS): string => {
+  const n = lengthBars(getProgression(progressionId), id);
+  return `${n} bar${n === 1 ? '' : 's'}`;
+};
 const instShort = (i: Instrument): string => i.name.replace(/\s*\(.*\)$/, '');
 
 /* ---------------------------------------------------------------- controls */
@@ -95,7 +102,7 @@ function buildStaticControls(): void {
   $('prog-list').replaceChildren(...PROGRESSIONS.map(p =>
     radio('prog', p.id, `<span>${SHORT_NAME[p.id] ?? p.name}</span><span class="roman">${romansFor(p.id).join(' ')}</span>`)));
   $('len-list').replaceChildren(...(Object.keys(LENGTHS) as (keyof typeof LENGTHS)[]).map(id =>
-    radio('len', id, `<span>${lengthShort(id)}</span>`)));
+    radio('len', id, '<span></span>')));
   $<HTMLSelectElement>('sel-inst').innerHTML = INSTRUMENTS.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
   $<HTMLSelectElement>('sel-focus').innerHTML = [`<option value="any">Any</option>`, ...CONCEPTS.map(c => `<option value="${c}">${CONCEPT_NAME[c]}</option>`)].join('');
 }
@@ -128,6 +135,10 @@ function syncControls(): void {
   syncTarget();
   $('t-analyze').setAttribute('aria-pressed', String(settings.analyze));
   setRadio('len', settings.length);
+  document.querySelectorAll<HTMLInputElement>('input[name="len"]').forEach(r => {
+    const span = r.parentElement?.querySelector('span');
+    if (span) span.textContent = lengthShort(settings.progressionId, r.value as keyof typeof LENGTHS);
+  });
   $<HTMLSelectElement>('sel-inst').value = settings.instrumentId;
   $<HTMLSelectElement>('sel-key').value = String(settings.key);
   $('prog-desc').textContent = prog.description;
@@ -365,7 +376,7 @@ function renderMeta(): void {
   $('lick-title').textContent = `${progressionName(lick)} in ${titleKeyLabel(lick, i)}`;
   const who = isTransposing(i) ? `${instShort(i)} · concert ${keyLabel(lick.keyPc, lick.mode)}` : instShort(i);
   const meta = $('lick-meta');
-  meta.replaceChildren(`${who} · ${lengthShort(lick.length)} · `);
+  meta.replaceChildren(`${who} · ${lengthShort(lick.progressionId, lick.length)} · `);
   if (lick.targetScore !== undefined) meta.append(`aimed for ${displayScore(lick.targetScore)} · scored ${displayScore(d.score)}`);
   else if (d.tier === lick.requestedTier) meta.append(`${TIER_NAMES[d.tier]}, as requested`);
   else {
@@ -530,7 +541,11 @@ function startPlayback(keepDrill = false): void {
       if (!(notesCovered() && !settings.hideKeepChords)) renderNotation();
     },
     onStatus: s => { if (/count/i.test(s)) setStatus(s.toLowerCase()); },
-    onPassEnd: (_i, info) => { practice = store.recordPractice(info.lick, info.bpm); },
+    // In call and response the player plays on the response (silent-lead) passes; the call pass is listening.
+    onPassEnd: (_i, info) => {
+      if (settings.callResponse && !info.silentLead) return;
+      practice = store.recordPractice(info.lick, info.bpm);
+    },
     onPass: run ? drillOnPass : undefined,
     onPassStart: run ? drillOnPassStart : undefined,
     onEnd: () => { finishDrill(); highlight = []; setStatus(run?.session.drill ? 'Drill complete' : 'Ready'); updateTransport(); renderNotation(); },
@@ -788,20 +803,32 @@ function setupDialog(id: string, openerId: string): HTMLDialogElement {
 let dailyGenerated: { key: string; lick: Lick } | null = null;
 
 /** A saved lick picked by the date, or (nothing saved) a lick generated from a seed fixed for the day. */
+const DAILY_KEY = 'iivi:v1:daily';
+
+/**
+ * A saved lick picked by the date, or (nothing saved) a lick generated from a seed fixed for the day. The day's pick is
+ * remembered, so saving or removing other licks doesn't change it mid-day; the generated one is the same lick on every
+ * instrument (generated in a fixed concert range, then fitted).
+ */
 function getLickOfDay(): { lick: Lick; saved: boolean } | null {
   const now = Date.now();
-  const saved = pickForDay([...favorites].sort((a, b) => (a.lick.id < b.lick.id ? -1 : 1)), now);
-  if (saved) return { lick: saved.lick, saved: true };
   const day = dayNumber(now);
+  let remembered: { day: number; id: string } | null = null;
+  try { remembered = JSON.parse(localStorage.getItem(DAILY_KEY) ?? 'null'); } catch { /* storage unavailable */ }
+  const kept = remembered && remembered.day === day ? favorites.find(f => f.lick.id === remembered!.id) : undefined;
+  const saved = kept ?? pickForDay([...favorites].sort((a, b) => (a.lick.id < b.lick.id ? -1 : 1)), now);
+  if (saved) {
+    if (!kept) try { localStorage.setItem(DAILY_KEY, JSON.stringify({ day, id: saved.lick.id })); } catch { /* ignore */ }
+    return { lick: saved.lick, saved: true };
+  }
   const key = `${day}:${settings.instrumentId}`;
   if (dailyGenerated?.key !== key) {
-    dailyGenerated = {
-      key,
-      lick: generateLick({
-        progressionId: 'major-251', length: 'standard', keyPc: day % 12, tier: 2,
-        range: concertRange(inst()), comfortRange: concertRangeForLevel(inst(), 2), seed: 1_000_003 + day,
-      }),
-    };
+    const alto = getInstrument('alto');
+    const base = generateLick({
+      progressionId: 'major-251', length: 'standard', keyPc: day % 12, tier: 2,
+      range: concertRange(alto), comfortRange: concertRangeForLevel(alto, 2), seed: 1_000_003 + day,
+    });
+    dailyGenerated = { key, lick: transposeLick(base, base.keyPc, concertRange(inst()), concertRangeForLevel(inst(), 2)) };
   }
   return { lick: dailyGenerated.lick, saved: false };
 }
@@ -973,7 +1000,7 @@ function updateBar(): void {
   // No aria-pressed: the visible label itself announces Play / Pause / Resume.
   $('pb-key').textContent = lick ? titleKeyLabel(lick, inst()) : '–';
   const st = $('status').textContent ?? '';
-  $('pb-bar').textContent = /Your turn$/.test(st) ? 'Your turn' : /Listen$/.test(st) ? 'Listen' : /^bar /.test(st) ? st.replace(' / ', '/') : /count/.test(st) ? st.replace(/.*: ?/, 'count ') : st === 'Paused' ? 'paused' : lick ? lengthShort(lick.length) : '';
+  $('pb-bar').textContent = /Your turn$/.test(st) ? 'Your turn' : /Listen$/.test(st) ? 'Listen' : /^bar /.test(st) ? st.replace(' / ', '/') : /count/.test(st) ? st.replace(/.*: ?/, 'count ') : st === 'Paused' ? 'paused' : lick ? lengthShort(lick.progressionId, lick.length) : '';
   updateRecap();
 }
 
@@ -982,7 +1009,7 @@ function updateRecap(): void {
   // the written key, like the title and key menu (alto in concert C reads A)
   const key = settings.key === 'random' ? 'Random key' : keyLabel((settings.key + inst().transpose) % 12, getProgression(settings.progressionId).mode);
   $('fold-recap').textContent =
-    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], ...(settings.focus !== 'any' ? [`Focus: ${CONCEPT_SHORT[settings.focus]}`] : []), instShort(inst()), key, lengthShort(settings.length)].join(' · ');
+    [`${SHORT_NAME[settings.progressionId] ?? getProgression(settings.progressionId).name} ${romans}`, TIER_NAMES[targetTier()], ...(settings.focus !== 'any' ? [`Focus: ${CONCEPT_SHORT[settings.focus]}`] : []), instShort(inst()), key, lengthShort(settings.progressionId, settings.length)].join(' · ');
 }
 
 function setupPhoneBar(): void {

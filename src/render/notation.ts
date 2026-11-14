@@ -170,12 +170,14 @@ function makeNote(p: Piece, clef: 'treble' | 'bass', sharps: boolean): StaveNote
 function makeTabNote(p: Piece, pos: FingeredNote | null): StaveNote {
   const [d, dots] = DUR_NAME[p.disp] ?? ['q', 0];
   let n: StaveNote;
-  if (p.midi == null || !pos) {
+  if (p.midi == null) {
     n = new StaveNote({ keys: ['b/4'], duration: d + 'd'.repeat(dots) + 'r', clef: 'treble' });
     if (dots) Dot.buildAndAttach([n], { all: true });
     return n;
   }
-  const t = new TabNote({ positions: [{ str: pos.str, fret: p.cont ? '' : pos.fret }], duration: d + 'd'.repeat(dots) }, true);
+  // A pitched note must never turn into a rest: with no fret (out of the instrument's range) mark it '?'.
+  if (!pos && !p.cont && import.meta.env?.DEV) console.warn('tab: no fret for pitched note', p.midi);
+  const t = new TabNote({ positions: [{ str: pos ? pos.str : 1, fret: p.cont ? '' : pos ? pos.fret : '?' }], duration: d + 'd'.repeat(dots) }, true);
   t.setStemDirection(-1);
   return t as unknown as StaveNote;
 }

@@ -46,6 +46,10 @@ const DEGREE_STEP = [0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6];
  * Letter step (0..6) above the chord root for each semitone above the root; null = not a degree of the chord
  * (chromatic: spelled by direction). dom7alt follows the altered-scale spelling G A♭ B♭ B D♭ E♭ F
  * (♯9 written as ♭3, ♯11 as ♭5), so its scale reuses the 3rd's letter once.
+ * maj7 / m6 / mMaj7: the ♯11 of a major 7th is the 4th's sharp (A♯ over E, G♯ over D, never B♭ over E), and the ♭6 (the Barry
+ * Harris 6th-diminished note) is always the 6th letter's flat, so the bar writes it one way (F♭ over A♭maj7, D♭ over Fmaj7).
+ * dom7 pc 6 is decided from the melody (spellNote nextRel): ♯11 on the 4th's letter when it moves to the 5th or 3rd, ♭5 on the
+ * 5th's letter when it falls to the 4th; with no such hint it follows the direction.
  */
 const STEPS: Record<ChordQualityId, (number | null)[]> = {
   m7: [0, null, 1, 2, null, 3, null, 4, null, 5, 6, null],
@@ -54,9 +58,9 @@ const STEPS: Record<ChordQualityId, (number | null)[]> = {
   m7b5: [0, 1, 1, 2, null, 3, 4, null, 5, null, 6, null],
   dom7: [0, null, 1, null, 2, 3, null, 4, null, 5, 6, null],
   dom7alt: [0, 1, null, 2, 2, null, 4, null, 5, null, 6, null],
-  maj7: [0, null, 1, null, 2, 3, null, 4, null, 5, null, 6],
-  m6: [0, null, 1, 2, null, 3, null, 4, null, 5, null, 6],
-  mMaj7: [0, null, 1, 2, null, 3, null, 4, null, 5, null, 6],
+  maj7: [0, null, 1, null, 2, 3, 3, 4, 5, 5, null, 6],
+  m6: [0, null, 1, 2, null, 3, null, 4, 5, 5, null, 6],
+  mMaj7: [0, null, 1, 2, null, 3, null, 4, 5, 5, null, 6],
 };
 
 const isWeird = (s: Spelled): boolean =>
@@ -142,6 +146,19 @@ export interface NoteContext {
   secondaryDom?: boolean;
   /** The note rises a half step to a note spelled `lowerNeighbourOf`: written on the letter below it (E♯ under F♯, D♯ under E, B♯ under C♯). */
   lowerNeighbourOf?: Spelled;
+  /** The note is the upper neighbour of a chord tone / of the target it encloses: a black key is the flat of the letter above (B♭ over A, never A♯). */
+  upperNeighbour?: boolean;
+  /** Interval (semitones above the chord root) of the next note when it stays over this chord: decides ♯11 / ♭5 of a dominant. */
+  nextRel?: number | null;
+  /** Number of sharps/flats of the written key; E♯ / B♯ / F♭ / C♭ are only used as lower neighbours in keys with 6 or more. */
+  keyAccidentals?: number;
+}
+
+/** Number of sharps or flats in the key signature (0..7). */
+export function keyAccidentalCount(keyPc: number, mode: Mode = 'major'): number {
+  const major = mode === 'minor' ? mod12(keyPc + 3) : keyPc;
+  const f = (major * 7) % 12; // steps up the circle of fifths: 0..6 sharps, 7..11 = 5..1 flats
+  return f <= 6 ? f : 12 - f;
 }
 
 /** Spell a MIDI pitch (in whatever pitch space the root is in) over a chord. */
@@ -150,21 +167,38 @@ export function spellNote(midi: number, ctx: NoteContext): SpelledNote {
   const rootPc = spelledPc(ctx.root);
   const rel = mod12(pc - rootPc);
   let step = STEPS[ctx.quality][rel];
-  if (ctx.secondaryDom && ctx.quality === 'dom7' && (rel === 1 || rel === 8)) step = rel === 1 ? 1 : 5;
+  // a dominant's ♭9 / ♭13 are always written on the 9th / 13th letter (E♭ and B♭ over D7, never D♯ / A♯)
+  if (ctx.quality === 'dom7' && (rel === 1 || rel === 8)) step = rel === 1 ? 1 : 5;
+  // the ♭6 of a major / minor-tonic chord rising a half step to the 6th is the lower neighbour of an enclosure (G♯ in B♭–G♯–A over C)
+  if (rel === 8 && ctx.nextRel === 9 && ctx.lowerNeighbourOf && (ctx.quality === 'maj7' || ctx.quality === 'm6' || ctx.quality === 'mMaj7')) step = null;
   const ri = letterIdx(ctx.root.letter);
   let s: Spelled | undefined;
-  if (step != null) s = degree(ctx.root, ctx.quality, step, pc);
-  else {
+  if (step != null) {
+    s = degree(ctx.root, ctx.quality, step, pc);
+    // the ♯11 of a major 7th written B♯ / E♯ is the plain ♭5 (C over F♯maj7)
+    if (ctx.quality === 'maj7' && rel === 6 && isWeird(s)) s = onLetter(ri + 4, pc);
+  } else {
+    // a dominant's tritone: ♯11 (4th letter) on the way to the 5th or 3rd, ♭5 (5th letter) falling to the 4th
+    if (ctx.quality === 'dom7' && rel === 6 && ctx.nextRel != null) {
+      const cands = ctx.nextRel === 7 || ctx.nextRel === 4 ? [3, 4] : ctx.nextRel === 5 ? [4, 3] : [];
+      for (const st of cands) {
+        const alt = onLetter(ri + st, pc);
+        if (Math.abs(alt.acc) <= 1 && !isWeird(alt)) { s = alt; break; }
+      }
+    }
     // the major 7th as a passing / leading tone over a dominant or minor 7th is the 7th letter's sharp (A♯ over B7, C♯ over Dm7)
-    if (rel === 11 && (ctx.quality === 'dom7' || ctx.quality === 'm7')) {
+    if (!s && rel === 11 && (ctx.quality === 'dom7' || ctx.quality === 'm7')) {
       const alt = onLetter(ri + 6, pc);
       if (Math.abs(alt.acc) <= 1 && !isWeird(alt)) s = alt;
     }
     // a lower neighbour is written relative to its target: the letter below it
+    // (E♯ / B♯ / F♭ / C♭ only in keys that already have 6 or more accidentals: otherwise the white key, F under F♯ in G)
     if (!s && ctx.lowerNeighbourOf) {
       const alt = onLetter(letterIdx(ctx.lowerNeighbourOf.letter) - 1, pc);
-      if (Math.abs(alt.acc) <= 1) s = alt;
+      if (Math.abs(alt.acc) <= 1 && !(isWeird(alt) && (ctx.keyAccidentals ?? 0) < 6)) s = alt;
     }
+    // an upper neighbour on a black key is the flat of the letter above it
+    if (!s && ctx.upperNeighbour && LETTER_PC.indexOf(pc) < 0) s = onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc);
     if (!s) {
       const white = LETTER_PC.indexOf(pc);
       if (white >= 0) s = ctx.halfStepDownToChordTone && (pc === 11 || pc === 4) ? onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc) : onLetter(white, pc);
@@ -200,6 +234,7 @@ export function spellLick(lick: Lick, inst: Instrument): (SpelledNote | null)[] 
   const t = inst.transpose;
   const key = mod12(lick.keyPc + t);
   const sharps = keyUsesSharps(key, lick.mode);
+  const keyAccidentals = keyAccidentalCount(key, lick.mode);
   const roots = lick.chords.map(c => spellChordRoot(mod12(c.rootPc + t), c.quality, key, lick.mode));
   const slots = PROGRESSIONS.find(p => p.id === lick.progressionId)?.slots;
   const n = lick.notes.length;
@@ -236,14 +271,31 @@ export function spellLick(lick: Lick, inst: Instrument): (SpelledNote | null)[] 
       }
     }
     const secondaryDom = slots?.[ci]?.fn === 'secondaryDom';
-    const ctx: NoteContext = { root: roots[ci], quality: c.quality, direction, sharps, halfStepDownToChordTone, secondaryDom };
+    const rootPcW = spelledPc(roots[ci]);
+    const nextRel = next && next.midi != null && judgedChord(lick.notes, j + 1) === ci ? mod12(next.midi + t - rootPcW) : null;
+    const ctx: NoteContext = { root: roots[ci], quality: c.quality, direction, sharps, halfStepDownToChordTone, secondaryDom, nextRel, keyAccidentals };
     if (next && next.midi != null && next.midi === note.midi + 1) {
       const target = spellAt(j + 1);
       if (target) ctx.lowerNeighbourOf = target;
     }
+    // an upper neighbour: falls a half step to a chord tone, or encloses a target (B♭ G♯ A, the target A two notes on)
+    let upper = false;
+    if (next && next.midi != null && next.midi === note.midi - 1) {
+      const nc = lick.chords[judgedChord(lick.notes, j + 1)];
+      upper = CHORDS[nc.quality].tones.some(x => mod12(x) === mod12(next.midi! - nc.rootPc));
+    }
+    if (!upper && next && next.midi != null && next.midi !== note.midi && lick.notes[j + 2]?.midi != null && !lick.notes[j + 1].tie) {
+      const after = lick.notes[j + 2];
+      upper = next.midi === after.midi! - 1 && note.midi === after.midi! + 1;
+    }
+    if (upper) ctx.upperNeighbour = true;
     const sp = spellNote(note.midi + t, ctx);
-    const rel = mod12(note.midi + t - spelledPc(roots[ci]));
-    if (STEPS[c.quality][rel] == null && !(secondaryDom && c.quality === 'dom7' && (rel === 1 || rel === 8))) {
+    const rel = mod12(note.midi + t - rootPcW);
+    const dom7Tritone = c.quality === 'dom7' && rel === 6 && (nextRel === 7 || nextRel === 4 || nextRel === 5);
+    const blackUpper = upper && LETTER_PC.indexOf(mod12(note.midi + t)) < 0;
+    // the major 7th over a dominant / minor 7th is the 7th letter's sharp (D♯ over E7) wherever it falls in the bar
+    const leadingTone = rel === 11 && (c.quality === 'dom7' || c.quality === 'm7') && sp.letter === LETTERS[(letterIdx(roots[ci].letter) + 6) % 7];
+    if (STEPS[c.quality][rel] == null && !(c.quality === 'dom7' && (rel === 1 || rel === 8)) && !dom7Tritone && !blackUpper && !leadingTone) {
       kind[i] = next && next.midi != null && Math.abs(next.midi - note.midi) === 1 ? 'resolve' : 'free';
     }
     return (out[i] = sp);

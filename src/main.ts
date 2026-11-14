@@ -37,6 +37,9 @@ const persist = (): void => store.saveSettings(settings);
 /** Slow practice is 60% of the tempo but never below the player's 40 bpm floor, so display, playback and MIDI agree. */
 const effectiveBpm = (): number => (settings.slow ? Math.max(40, Math.round(settings.bpm * 0.6)) : settings.bpm);
 const targetTier = (): Tier => tierForScore(posToScore(settings.target));
+/** Comfortable range for re-keying or re-fitting a lick: the level it was generated for, not the current slider. */
+const comfortFor = (l: Lick): [number, number] =>
+  concertRangeForLevel(inst(), l.targetScore !== undefined ? tierForScore(l.targetScore) : l.requestedTier);
 
 /** Highlight colour on the (always white) notation sheet. */
 const SHEET_ACCENT = '#2747C9';
@@ -394,7 +397,7 @@ function refit(keyPc: number): void {
   stopPlayback();
   const old = lick.id;
   const base = sourceLick && sourceLick.id === old ? sourceLick : lick;
-  showLick(transposeLick(base, keyPc, concertRange(inst())), true, old, true);
+  showLick(transposeLick(base, keyPc, concertRange(inst()), comfortFor(base)), true, old, true);
 }
 
 function restartIfPlaying(): void {
@@ -527,7 +530,7 @@ function bind(): void {
     getFavorites: () => favorites,
     onLoad: l => {
       stopPlayback();
-      showLick(transposeLick(l, l.keyPc, concertRange(inst())), true);
+      showLick(transposeLick(l, l.keyPc, concertRange(inst()), comfortFor(l)), true);
     },
     onRemoveFavorite: id => { favorites = store.removeFavorite(id); updateFav(); },
     onClearHistory: () => { store.clearHistory(); history = []; },
@@ -651,7 +654,7 @@ syncControls();
 bind();
 if (history.length) {
   const h = history[0].lick;
-  showLick(transposeLick(h, h.keyPc, concertRange(inst())), false);
+  showLick(transposeLick(h, h.keyPc, concertRange(inst()), comfortFor(h)), false);
 } else {
   generate();
 }

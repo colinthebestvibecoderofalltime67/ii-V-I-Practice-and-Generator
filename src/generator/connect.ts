@@ -1,5 +1,5 @@
 import type { LickChord, LickNote } from '../types';
-import { TICKS_PER_16TH, TPBAR } from '../types';
+import { TICKS_PER_16TH, TPB, TPBAR } from '../types';
 import { isTupletDur, splitDur } from '../theory/rhythm';
 import { CHORDS, inScale, isChordToneOrTension } from '../theory/chords';
 import type { Rng } from './rng';
@@ -22,7 +22,7 @@ export function leapPenalty(d: number): number {
   d = Math.abs(d);
   if (d <= 2) return d * 0.05;
   if (d <= 7) return 0.1 + (d - 2) * 0.4;
-  return 2.1 + (d - 7) * 1.5;
+  return 2.1 + (d - 7) * 1.5 + (d >= 10 ? 4 : 0);
 }
 
 export function chordIndexAt(chords: LickChord[], tick: number): number {
@@ -70,10 +70,13 @@ export function eventsToNotes(events: Ev[], chords: LickChord[]): LickNote[] {
   return notes;
 }
 
-/** Notes that may close a lick: chord tones (1 3 5 6/7) or the 9th. */
+/**
+ * Notes that may close a lick: chord tones (1 3 5 6/7) or the 9th; the 6th also closes a maj7 (a 6/9 sound).
+ * A major 7th never closes a m6 chord (it is not in its tones).
+ */
 export function isEndingTone(midi: number, rootPc: number, q: LickChord['quality']): boolean {
   const rel = mod12(midi - rootPc);
-  return CHORDS[q].tones.some(t => mod12(t) === rel) || rel === 2;
+  return CHORDS[q].tones.some(t => mod12(t) === rel) || rel === 2 || (q === 'maj7' && rel === 9);
 }
 
 function nearestMatching(
@@ -153,6 +156,11 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     if (flexible(j)) {
       for (const o of opts) {
         if (!inRange(o.j) || (o.j2 != null && !inRange(o.j2))) continue;
+        // never create a big leap by swapping in an approach note (into it, out of it, or inside an enclosure)
+        const into = o.j2 != null ? o.j2 : before;
+        if (Math.abs(target - o.j) >= 10 || (o.j2 != null && Math.abs(o.j - o.j2) >= 10)) continue;
+        if (into != null && Math.abs(o.j - into) >= 10 && o.j2 == null) continue;
+        if (o.j2 != null && j2 - 1 >= 0 && events[j2 - 1].midi != null && Math.abs(o.j2 - (events[j2 - 1].midi as number)) >= 10) continue;
         const c1 = o.j2 != null
           ? (j2 >= 0 && j2 - 1 >= 0 && events[j2 - 1].midi != null ? leapPenalty(o.j2 - (events[j2 - 1].midi as number)) : 0)
             + leapPenalty(o.j - o.j2) + leapPenalty(target - o.j)
@@ -179,8 +187,14 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
   if (last >= 0) {
     const e = events[last];
     const c = chords[chordIndexAt(chords, e.start)];
-    if (!isEndingTone(e.midi as number, c.rootPc, c.quality)) {
-      const np = nearestMatching(e.midi as number, p => isEndingTone(p, c.rootPc, c.quality), range, () => 0, 6);
+    const pj = soundingBefore(last);
+    const prevPitch = pj >= 0 ? (events[pj].midi as number) : null;
+    // the closing note is a chord tone / 9th / 6th and never re-attacks the pitch before it
+    if (!isEndingTone(e.midi as number, c.rootPc, c.quality) || e.midi === prevPitch) {
+      const np = nearestMatching(
+        e.midi as number, p => isEndingTone(p, c.rootPc, c.quality) && p !== prevPitch, range,
+        p => (prevPitch == null ? 0 : leapPenalty(p - prevPitch)), 6,
+      );
       if (np != null) {
         e.midi = np;
         changed++;
@@ -188,6 +202,51 @@ export function fixJoins(events: Ev[], chords: LickChord[], range: [number, numb
     }
   }
   return changed;
+}
+
+/**
+ * Octave repair for big leaps (>= 10 semitones) between consecutive sounding notes: moves one of the two notes (never
+ * changing its pitch class, so every harmonic rule keeps holding) by an octave when that shrinks the line's leaps and
+ * stays inside `range`. Several passes; deterministic. Returns the number of notes moved.
+ */
+export function fixLeaps(events: Ev[], range: [number, number]): number {
+  const idx: number[] = [];
+  events.forEach((e, i) => { if (e.midi != null) idx.push(i); });
+  const p = (k: number) => events[idx[k]].midi as number;
+  const local = (k: number): number => {
+    let c = 0;
+    if (k > 0) c += leapPenalty(p(k) - p(k - 1));
+    if (k + 1 < idx.length) c += leapPenalty(p(k + 1) - p(k));
+    return c;
+  };
+  let moved = 0;
+  for (let pass = 0; pass < 6; pass++) {
+    let any = false;
+    for (let k = 1; k < idx.length; k++) {
+      if (Math.abs(p(k) - p(k - 1)) < 10) continue;
+      let best: { k: number; d: number } | null = null;
+      let bestC = local(k - 1) + local(k);
+      for (const kk of [k - 1, k]) {
+        for (const d of [-24, -12, 12, 24]) {
+          const orig = p(kk);
+          const np = orig + d;
+          if (np < range[0] || np > range[1]) continue;
+          if ((kk > 0 && np === p(kk - 1)) || (kk + 1 < idx.length && np === p(kk + 1))) continue;
+          events[idx[kk]].midi = np;
+          const c = local(k - 1) + local(k);
+          events[idx[kk]].midi = orig;
+          if (c < bestC - 0.5) { bestC = c; best = { k: kk, d }; }
+        }
+      }
+      if (best) {
+        events[idx[best.k]].midi = p(best.k) + best.d;
+        moved++;
+        any = true;
+      }
+    }
+    if (!any) break;
+  }
+  return moved;
 }
 
 /* ------------------------------ phrasing pass ------------------------------ */
@@ -253,7 +312,24 @@ export interface PhrasingOptions {
   level: number;
 }
 
-const ANTIC_BY_LEVEL = [0.07, 0.38, 0.4, 0.33];
+/** Pitches attacked in [from, to), as a string, for comparing beats. */
+function beatPitches(evs: Ev[], from: number, to: number): string {
+  return evs.filter(x => x.midi != null && x.start >= from && x.start < to).map(x => x.midi).join(',');
+}
+
+/** Would anticipating events[i] (dropping the previous event when `dropsPrev`) leave the two beats before the change identical? */
+function repeatsBeat(events: Ev[], i: number, dropsPrev: boolean, chordStart: number): boolean {
+  const sim = events.map(x => ({ ...x }));
+  if (dropsPrev) sim.splice(i - 1, 1);
+  const j = sim.findIndex(x => x.start === chordStart);
+  if (j < 0) return false;
+  sim[j] = { ...sim[j], start: chordStart - EIGHTH };
+  const a = beatPitches(sim, chordStart - 2 * TPB, chordStart - TPB);
+  const b = beatPitches(sim, chordStart - TPB, chordStart);
+  return a.includes(',') && a === b;
+}
+
+const ANTIC_BY_LEVEL = [0.07, 0.42, 0.6, 0.5];
 const lerp4 = (t: readonly number[], level: number): number => {
   const x = Math.min(3, Math.max(0, level - 1));
   const i = Math.min(2, Math.floor(x));
@@ -291,6 +367,13 @@ export function phraseEvents(
     const dropsPrev = last === EIGHTH && prev.pieces.length === 1;
     const lead = dropsPrev ? events[i - 2] : prev;
     if (lead && lead.midi === e.midi) continue;
+    if (dropsPrev && prev.midi != null) {
+      // never delete a guide-tone landing of the previous chord
+      const pc = chords[chordIndexAt(chords, prev.start)];
+      const prel = mod12(prev.midi - pc.rootPc);
+      if (CHORDS[pc.quality].guide.some(g => mod12(g) === prel)) continue;
+    }
+    if (repeatsBeat(events, i, dropsPrev, c.start)) continue;
     if (dropsPrev) removeEvent(events, fragStarts, i - 1);
     else if (last === EIGHTH) prev.pieces.pop();
     else prev.pieces[prev.pieces.length - 1] = last - EIGHTH;

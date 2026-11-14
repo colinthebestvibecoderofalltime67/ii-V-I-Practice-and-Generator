@@ -70,7 +70,7 @@ function checkInvariants(lick: Lick, range: [number, number], label: string) {
   const last = sounding[sounding.length - 1];
   const lc = lick.chords[lick.chords.length - 1];
   const rel = mod12(last.midi! - lc.rootPc);
-  const okRels = [...CHORDS[lc.quality].tones.map(mod12), 2];
+  const okRels = [...CHORDS[lc.quality].tones.map(mod12), 2, ...(lc.quality === 'maj7' ? [9] : [])];
   expect(okRels.includes(rel), `${label} last note rel ${rel} over ${lc.symbol}`).toBe(true);
 
   // honest label
@@ -208,8 +208,8 @@ describe('targetScore (difficulty slider)', () => {
         }
       }
       all.push(...errs);
-      // very low targets are bounded below by the simplest possible licks (about 3 points)
-      expect(median(errs), `median error at pos ${pos}`).toBeLessThanOrEqual(pos < 10 ? 2.5 : 1.2);
+      // very low targets are bounded below by the simplest possible licks (about 3 points; altered V licks must now carry a b9/#9/b13, minor-251 adds 4 points of harmony)
+      expect(median(errs), `median error at pos ${pos}`).toBeLessThanOrEqual(pos < 10 ? 3.2 : 1.2);
       if (pos >= 10) {
         const p90 = [...errs].sort((a, b) => a - b)[Math.floor(errs.length * 0.9)];
         expect(p90, `p90 error at pos ${pos}`).toBeLessThanOrEqual(3);

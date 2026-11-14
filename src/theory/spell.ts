@@ -48,7 +48,9 @@ const DEGREE_STEP = [0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6];
  */
 const STEPS: Record<ChordQualityId, (number | null)[]> = {
   m7: [0, null, 1, 2, null, 3, null, 4, null, 5, 6, null],
-  m7b5: [0, 1, null, 2, null, 3, 4, null, 5, null, 6, null],
+  // the natural 9th of a half-diminished chord is not in its Locrian scale but is a common diatonic tone: it keeps the 9th's letter
+  // (C# over Bm7b5, written the same way wherever it falls in the bar), and shares it with the b9
+  m7b5: [0, 1, 1, 2, null, 3, 4, null, 5, null, 6, null],
   dom7: [0, null, 1, null, 2, 3, null, 4, null, 5, 6, null],
   dom7alt: [0, 1, null, 2, 2, null, 4, null, 5, null, 6, null],
   maj7: [0, null, 1, null, 2, 3, null, 4, null, 5, null, 6],
@@ -128,6 +130,8 @@ export interface NoteContext {
   quality: ChordQualityId;
   /** Where the melody goes next: chromatic notes rise as sharps, fall as flats. */
   direction?: 'up' | 'down' | null;
+  /** The note moves down by a half step to a chord tone: an upper chromatic neighbour, written flat (C♭ over E♭m7, F♭ over A♭maj7). */
+  halfStepDownToChordTone?: boolean;
   /** Fallback for a chromatic note with no direction when the root has no accidental. */
   sharps?: boolean;
 }
@@ -141,7 +145,7 @@ export function spellNote(midi: number, ctx: NoteContext): SpelledNote {
   if (step != null) s = degree(ctx.root, ctx.quality, step, pc);
   else {
     const white = LETTER_PC.indexOf(pc);
-    if (white >= 0) s = onLetter(white, pc);
+    if (white >= 0) s = ctx.halfStepDownToChordTone && (pc === 11 || pc === 4) ? onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc) : onLetter(white, pc);
     else {
       const sharp = ctx.direction ? ctx.direction === 'up' : ctx.root.acc !== 0 ? ctx.root.acc > 0 : !!ctx.sharps;
       s = sharp ? onLetter(LETTER_PC.indexOf(mod12(pc - 1)), pc) : onLetter(LETTER_PC.indexOf(mod12(pc + 1)), pc);
@@ -172,7 +176,8 @@ export function spellLick(lick: Lick, inst: Instrument): (SpelledNote | null)[] 
     while (lick.notes[j].tie && lick.notes[j + 1]) j++;
     const next = lick.notes[j + 1];
     const direction = next && next.midi != null && next.midi !== n.midi ? (next.midi > n.midi ? 'up' : 'down') : null;
-    out.push(spellNote(n.midi + t, { root: roots[ci], quality: c.quality, direction, sharps }));
+    const halfStepDownToChordTone = !!next && next.midi === n.midi - 1 && CHORDS[c.quality].tones.some(x => mod12(x) === mod12(next.midi! - lick.chords[ci].rootPc));
+    out.push(spellNote(n.midi + t, { root: roots[ci], quality: c.quality, direction, sharps, halfStepDownToChordTone }));
   });
   return out;
 }

@@ -7,6 +7,13 @@ import type { Lick, LickNote } from '../types';
 import { TPB } from '../types';
 import { CHORDS, inScale } from '../theory/chords';
 import { mod12 } from '../theory/pitch';
+import { anticipationFitsOldChord } from '../generator/connect';
+
+/** Degree label of the closing note, for the ending-tone distribution. */
+export type EndingDegree = 'R' | '3' | '5' | '7' | '9' | '6' | 'other';
+export const ENDING_DEGREES: readonly EndingDegree[] = ['R', '3', '5', '7', '9', '6', 'other'];
+const endingDegree = (rel: number): EndingDegree =>
+  rel === 0 ? 'R' : rel === 3 || rel === 4 ? '3' : rel === 7 ? '5' : rel === 10 || rel === 11 ? '7' : rel === 2 ? '9' : rel === 9 ? '6' : 'other';
 
 export interface Attack { idx: number; midi: number; start: number; dur: number; chord: number }
 
@@ -52,6 +59,24 @@ export interface LickMetrics {
   lydianDomEleven: number;
   /** The last attack repeats the pitch of the one before it. */
   endingRepeat: boolean;
+  /** For each Lydian dominant (tritone-sub / backdoor V): #11 present and no natural 11 over it; and any b9/#9/b13 over it. */
+  lydianSharp11: boolean[];
+  lydianAltered: boolean[];
+  /** Longest run of consecutive chord-tone-only attacks within an octave (arpeggio noodling when > 6). */
+  noodleRun: number;
+  /** Longest stepwise (<= 2 semitones) run of 16th notes starting in the final bar. */
+  finalSixteenthRun: number;
+  /** Degree of the closing note over the last chord. */
+  ending: EndingDegree;
+  /** Anticipated notes sounding outside the OLD chord's scale when the old chord is m7b5, 7alt or a Lydian dominant. */
+  anticipationClashes: number;
+  /** For each 7alt chord: thin colour (fewer than two altered tones, none held a quarter or more on a beat). */
+  altThin: boolean[];
+  /** For each m7b5 chord: the b5 is stated over it. */
+  m7b5Flat5: boolean[];
+  /** Adjacent cell pairs, and those sharing their first three or last two pitches (rel to the chord root). */
+  cellPairs: number;
+  nearDuplicatePairs: number;
 }
 
 export function lickMetrics(lick: Lick): LickMetrics {
@@ -112,9 +137,73 @@ export function lickMetrics(lick: Lick): LickMetrics {
     if (notes[i].start % TPB === 0 && notes[i].dur === 9 && notes[i + 1].dur === 3) dottedPairs++;
   }
   const endingRepeat = att.length > 1 && att[att.length - 1].midi === att[att.length - 2].midi;
+
+  const isLydChord = (ci: number) => lydianDom && chords[ci].quality === 'dom7';
+  const lydianSharp11: boolean[] = [];
+  const lydianAltered: boolean[] = [];
+  chords.forEach((ch, ci) => {
+    if (!isLydChord(ci)) return;
+    const rels = att.filter(a => a.chord === ci).map(a => mod12(a.midi - ch.rootPc));
+    lydianSharp11.push(rels.includes(6) && !rels.includes(5));
+    lydianAltered.push(rels.some(r => r === 1 || r === 3 || r === 8));
+  });
+  let noodleRun = 0;
+  let run: number[] = [];
+  for (const a of att) {
+    const ch = chords[a.chord];
+    if (!CHORDS[ch.quality].tones.some(t => mod12(t) === mod12(a.midi - ch.rootPc))) { run = []; continue; }
+    run.push(a.midi);
+    while (Math.max(...run) - Math.min(...run) > 12) run.shift();
+    noodleRun = Math.max(noodleRun, run.length);
+  }
+  const lastBar = lick.totalTicks - 4 * TPB;
+  let finalSixteenthRun = 0;
+  let sr = 0;
+  for (let i = 0; i < att.length; i++) {
+    const sixteenth = att[i].dur <= 3 && att[i].dur % 3 === 0;
+    if (sixteenth && i > 0 && att[i - 1].dur <= 3 && Math.abs(att[i].midi - att[i - 1].midi) <= 2) sr++;
+    else sr = sixteenth ? 1 : 0;
+    if (att[i].start >= lastBar) finalSixteenthRun = Math.max(finalSixteenthRun, sr);
+  }
+  const lastAtt = att[att.length - 1];
+  const ending = lastAtt ? endingDegree(mod12(lastAtt.midi - chords[lastAtt.chord].rootPc)) : 'other';
+  let anticipationClashes = 0;
+  for (let c = 1; c < chords.length; c++) {
+    const t = chords[c].start;
+    for (const a of att) {
+      if (a.start < t && a.start >= t - TPB && a.start + a.dur > t && !anticipationFitsOldChord(a.midi, chords[c - 1], isLydChord(c - 1))) anticipationClashes++;
+    }
+  }
+  const altThin = chords.flatMap((ch, ci) => {
+    if (ch.quality !== 'dom7alt') return [];
+    let n = 0;
+    let held = false;
+    for (const a of att) {
+      if (a.chord !== ci || ![1, 3, 8].includes(mod12(a.midi - ch.rootPc))) continue;
+      n++;
+      if (a.start % TPB === 0 && a.dur >= TPB) held = true;
+    }
+    return [n < 2 && !held];
+  });
+  const m7b5Flat5 = chords.flatMap((ch, ci) => ch.quality !== 'm7b5' ? [] : [att.some(a => a.chord === ci && mod12(a.midi - ch.rootPc) === 6)]);
+  let cellPairs = 0;
+  let nearDuplicatePairs = 0;
+  const cs = lick.cellStarts ?? [];
+  const cellRels = cs.map((st, k) => {
+    const end = k + 1 < cs.length ? cs[k + 1] : Infinity;
+    return att.filter(a => a.start >= st && a.start < end).map(a => mod12(a.midi - chords[a.chord].rootPc));
+  });
+  for (let k = 1; k < cellRels.length; k++) {
+    const p = cellRels[k - 1];
+    const q = cellRels[k];
+    if (p.length < 3 || q.length < 3) continue;
+    cellPairs++;
+    if (p.slice(0, 3).join() === q.slice(0, 3).join() || p.slice(-2).join() === q.slice(-2).join()) nearDuplicatePairs++;
+  }
   return {
     anticipations, startsWithRest, seamRepeats, dominantArrivalGuide, altNaturalOnBeat, longChromaticOnBeat, span,
     bigLeaps, sixteenths, attackCount: att.length, altColoured, maj7FourthStressed, dottedPairs, lydianDomEleven, endingRepeat,
+    lydianSharp11, lydianAltered, noodleRun, finalSixteenthRun, ending, anticipationClashes, altThin, m7b5Flat5, cellPairs, nearDuplicatePairs,
   };
 }
 
@@ -147,12 +236,32 @@ export interface MusicalitySummary {
   lydianElevenShare: number;
   /** Share of licks whose last note repeats the note before it. */
   endingRepeatShare: number;
+  /** Share of tritone-sub/backdoor dominants with the #11 and no natural 11 (the Lydian-dominant sound). */
+  lydianSharp11Share: number;
+  /** Share of those dominants carrying a b9, #9 or b13 (the wrong, altered colour). */
+  lydianAlteredShare: number;
+  /** Share of licks with arpeggio noodling (more than six chord-tone attacks in a row within an octave). */
+  noodleShare: number;
+  /** Share of licks with a stepwise 16th run of more than four notes in the final bar. */
+  finalSixteenthRunShare: number;
+  /** Distribution of the closing note's degree over the last chord (shares sum to 1). */
+  endingShares: Record<EndingDegree, number>;
+  /** Anticipated notes outside the old chord's scale (m7b5, 7alt, Lydian dominant), per anticipation. */
+  anticipationClashShare: number;
+  /** Share of 7alt chords with thin altered colour (see LickMetrics.altThin). */
+  altThinShare: number;
+  /** Share of m7b5 chords stating the b5. */
+  m7b5Flat5Share: number;
+  /** Share of adjacent cell pairs that share their first three or last two pitches. */
+  nearDuplicateShare: number;
 }
 
 export function summarize(licks: readonly Lick[]): MusicalitySummary {
   let ant = 0, rest = 0, seam = 0, guideHit = 0, guideN = 0, altNat = 0, longChr = 0, nAtt = 0;
   let leap = 0, six = 0, altN = 0, altPlain = 0, fourth = 0, dotted = 0, lyd = 0, lydN = 0, endRep = 0;
   const cellUse = new Map<string, number>();
+  let lsN = 0, ls = 0, laN = 0, la = 0, nood = 0, f16 = 0, clash = 0, antN = 0, thinN = 0, thin = 0, flatN = 0, flat = 0, pairs = 0, dupPairs = 0;
+  const endCount: Record<EndingDegree, number> = { R: 0, '3': 0, '5': 0, '7': 0, '9': 0, '6': 0, other: 0 };
   for (const l of licks) {
     const m = lickMetrics(l);
     if (m.anticipations > 0) ant++;
@@ -169,6 +278,17 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     if (m.dottedPairs >= 2) dotted++;
     if (l.progressionId === 'tritone-251' || l.progressionId === 'backdoor-251') { lydN++; if (m.lydianDomEleven > 0) lyd++; }
     if (m.endingRepeat) endRep++;
+    for (const v of m.lydianSharp11) { lsN++; if (v) ls++; }
+    for (const v of m.lydianAltered) { laN++; if (v) la++; }
+    if (m.noodleRun > 6) nood++;
+    if (m.finalSixteenthRun > 4) f16++;
+    endCount[m.ending]++;
+    clash += m.anticipationClashes;
+    antN += m.anticipations;
+    for (const v of m.altThin) { thinN++; if (v) thin++; }
+    for (const v of m.m7b5Flat5) { flatN++; if (v) flat++; }
+    pairs += m.cellPairs;
+    dupPairs += m.nearDuplicatePairs;
     for (const id of new Set(l.fragmentIds)) cellUse.set(id, (cellUse.get(id) ?? 0) + 1);
   }
   const n = Math.max(1, licks.length);
@@ -192,5 +312,14 @@ export function summarize(licks: readonly Lick[]): MusicalitySummary {
     dottedShare: dotted / n,
     lydianElevenShare: lydN ? lyd / lydN : 0,
     endingRepeatShare: endRep / n,
+    lydianSharp11Share: lsN ? ls / lsN : 0,
+    lydianAlteredShare: laN ? la / laN : 0,
+    noodleShare: nood / n,
+    finalSixteenthRunShare: f16 / n,
+    endingShares: Object.fromEntries(ENDING_DEGREES.map(d => [d, endCount[d] / n])) as Record<EndingDegree, number>,
+    anticipationClashShare: antN ? clash / antN : 0,
+    altThinShare: thinN ? thin / thinN : 0,
+    m7b5Flat5Share: flatN ? flat / flatN : 0,
+    nearDuplicateShare: pairs ? dupPairs / pairs : 0,
   };
 }

@@ -310,6 +310,20 @@ export function fixSeams(events: Ev[], fragStarts: number[], chords: LickChord[]
 export interface PhrasingOptions {
   /** Fractional difficulty level 1..4 (Beginner..Expert). */
   level: number;
+  /** Per chord: a Lydian dominant (tritone-sub / backdoor V), whose scale has the #11, not the natural 11. */
+  lydian?: boolean[];
+}
+
+const LYDIAN_DOM_SCALE = [0, 2, 4, 6, 7, 9, 10];
+
+/**
+ * May a note of the NEW chord sound early over the OLD one? Not when the old chord is m7b5, 7alt or a Lydian dominant and the
+ * note is outside that chord's scale (the 3rd of the I sounding as a #9 over a Lydian V; a natural 9 over 7alt).
+ */
+export function anticipationFitsOldChord(midi: number, old: LickChord, oldIsLydian: boolean): boolean {
+  if (old.quality === 'm7b5' || old.quality === 'dom7alt') return inScale(midi, old.rootPc, old.quality);
+  if (old.quality === 'dom7' && oldIsLydian) return LYDIAN_DOM_SCALE.includes(mod12(midi - old.rootPc));
+  return true;
 }
 
 /** Pitches attacked in [from, to), as a string, for comparing beats. */
@@ -329,7 +343,7 @@ function repeatsBeat(events: Ev[], i: number, dropsPrev: boolean, chordStart: nu
   return a.includes(',') && a === b;
 }
 
-const ANTIC_BY_LEVEL = [0.07, 0.36, 0.6, 0.5];
+const ANTIC_BY_LEVEL = [0.07, 0.45, 0.74, 0.5];
 const lerp4 = (t: readonly number[], level: number): number => {
   const x = Math.min(3, Math.max(0, level - 1));
   const i = Math.min(2, Math.floor(x));
@@ -373,6 +387,7 @@ export function phraseEvents(
       const prel = mod12(prev.midi - pc.rootPc);
       if (CHORDS[pc.quality].guide.some(g => mod12(g) === prel)) continue;
     }
+    if (!anticipationFitsOldChord(e.midi, chords[ci - 1], !!opts.lydian?.[ci - 1])) continue;
     if (repeatsBeat(events, i, dropsPrev, c.start)) continue;
     if (dropsPrev) removeEvent(events, fragStarts, i - 1);
     else if (last === EIGHTH) prev.pieces.pop();

@@ -58,6 +58,19 @@ export const PROTOTYPE_OVERRIDES: Record<string, { qualities?: ChordQualityId[];
  */
 export const PROTOTYPE_DROP = new Set(['m7-proto-49', 'm7-proto-49h2', 'dom7-proto-49', 'dom7-proto-49h2']);
 
+/**
+ * Vocabulary cells dropped on load (the lib files keep them as history):
+ *  - noodling: 1-3-2-3-1-3-5-3 (maj7-voc-114), a 5-b7 oscillation (m7-voc-93), and the repeated-motif sequence cells
+ *    m7-adv-03, dom7-adv-01/02, m7b5-adv-01, which sound like exercises;
+ *  - wall-of-16ths scale/arpeggio runs that make Expert a speed test (maj7-adv-05, m7-adv-06, maj7-voc-69, m6-voc-37);
+ *  - Level 2 7alt cells that are Mixolydian with one hidden b13 (dom7alt-voc-28, -77, -81).
+ */
+export const VOCAB_DROP = new Set([
+  'maj7-voc-114', 'm7-voc-93', 'm7-adv-03', 'dom7-adv-01', 'dom7-adv-02', 'm7b5-adv-01',
+  'maj7-adv-05', 'm7-adv-06', 'maj7-voc-69', 'm6-voc-37',
+  'dom7alt-voc-28', 'dom7alt-voc-77', 'dom7alt-voc-81',
+]);
+
 function applyOverride(f: Fragment): Fragment {
   const o = PROTOTYPE_OVERRIDES[f.id];
   if (!o) return f;
@@ -68,7 +81,7 @@ function applyOverride(f: Fragment): Fragment {
 export const AUTHORED_FRAGMENTS: Fragment[] = [...SEED_FRAGMENTS, ...PROTOTYPE_FRAGMENTS.filter(f => !PROTOTYPE_DROP.has(f.id)), ...ORIGINAL_FRAGMENTS].map(applyOverride);
 
 /** The Phase 2 vocabulary (lib/vocab.ts, lib/advanced.ts, lib/phase2b.ts), also authored in 16ths. Kept apart from AUTHORED_FRAGMENTS, which some tests pin. */
-export const VOCABULARY_FRAGMENTS: Fragment[] = [...VOCAB_FRAGMENTS, ...ADVANCED_FRAGMENTS, ...PHASE2B_FRAGMENTS];
+export const VOCABULARY_FRAGMENTS: Fragment[] = [...VOCAB_FRAGMENTS, ...ADVANCED_FRAGMENTS, ...PHASE2B_FRAGMENTS].filter(f => !VOCAB_DROP.has(f.id));
 
 /**
  * Every fragment the generator may use, on the engine tick grid. Libraries that contain triplet durations

@@ -47,10 +47,19 @@ if (process.env.JSON) {
   for (const [name, m] of rows) {
     console.log(`${name.padEnd(12)} ${pct(m.bigLeapShare)} ${pct(m.sixteenthShare)}   ${pct(m.altPlainShare)}    ${pct(m.maj7FourthShare)}  ${pct(m.dottedShare)} ${pct(m.lydianElevenShare)}    ${pct(m.endingRepeatShare)}`);
   }
+  console.log('\nTier          lyd#11  lydAlt  noodle  16run  clash  altThin  m7b5-b5  nearDup  ending R/3/5/7/9/6');
+  for (const [name, m] of rows) {
+    const e = m.endingShares;
+    console.log(`${name.padEnd(12)} ${pct(m.lydianSharp11Share)} ${pct(m.lydianAlteredShare)} ${pct(m.noodleShare)} ${pct(m.finalSixteenthRunShare)} ${pct(m.anticipationClashShare)}  ${pct(m.altThinShare)}   ${pct(m.m7b5Flat5Share)}   ${pct(m.nearDuplicateShare)}   ${(['R', '3', '5', '7', '9', '6'] as const).map(d => (100 * e[d]).toFixed(0).padStart(3)).join(' ')}`);
+  }
   console.log('\nantic = licks with an anticipation into a chord change; pickup = starts with a rest; seam = licks that');
   console.log('re-attack the same pitch where two cells join; V-guide = dominant arrivals on the 3rd or 7th;');
   console.log('alt5/13 = natural 5 or 13 on a beat over 7alt, per 1,000 attacks; longChr = chromatic notes held a beat on a beat.');
   console.log('leap10 = licks with a leap of a minor 7th or more; 16ths = share of notes that are 16ths; altPlain = 7alt chords');
   console.log('with no b9/#9/b13; maj7-4th = licks stressing the 4th over maj7; dotted = licks with 2+ dotted-8th+16th beats;');
+  console.log('lyd#11 = tritone/backdoor dominants with #11 and no natural 11; lydAlt = those with a b9/#9/b13; noodle = licks with >6 chord-tone');
+  console.log('attacks in a row; 16run = licks with a stepwise 16th run > 4 in the last bar; clash = anticipations outside the old chord scale');
+  console.log('(m7b5/7alt/Lydian dom); altThin = 7alt with <2 altered tones and none held; m7b5-b5 = m7b5 chords stating the b5;');
+  console.log('nearDup = adjacent cells sharing first 3 / last 2 pitches; ending = closing-note degree shares.');
   console.log('lyd-11 = tritone/backdoor licks stressing the natural 11 on the dominant; endRepeat = last note repeats the one before.');
 }

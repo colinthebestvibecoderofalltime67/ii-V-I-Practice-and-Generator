@@ -140,20 +140,20 @@ describe('generator output on the new grid', () => {
     for (const s of lick.cellStarts!) expect(s % TPB).toBe(0);
   });
   it('snapshot of the current generator (seed 3, tier 3, key C, tenor range, legacy pool)', () => {
-    expect(lick.fragmentIds).toEqual(['m7-orig-15', 'dom7-proto-48', 'maj7-seed-3', 'maj7-proto-53h2']);
-    expect(lick.cellStarts).toEqual([0, 48, 96, 120]);
-    expect(lick.difficulty.score).toBe(34.9);
-    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[72, 0, 6], [71, 6, 6], [69, 12, 6], [68, 18, 6]]);
-    expect(lick.notes.length).toBe(21);
+    expect(lick.fragmentIds).toEqual(['m7-proto-46', 'dom7-proto-36h1', 'dom7-proto-15h1', 'maj7-proto-31']); // re-pinned: the final chord's first note now prefers a guide tone, endings cap the 9th
+    expect(lick.cellStarts).toEqual([0, 48, 72, 96]);
+    expect(lick.difficulty.score).toBe(17.6);
+    expect(lick.notes.slice(0, 4).map(n => [n.midi, n.start, n.dur])).toEqual([[null, 0, 12], [57, 12, 6], [55, 18, 6], [53, 24, 6]]);
+    expect(lick.notes.length).toBe(16);
   });
   it('exports stable MIDI (sha1 snapshot of the current generator and exporter)', () => {
     const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 0, tier: 4, range, seed: 3, fragments: LEGACY_POOL });
-    expect(l.difficulty.score).toBe(53.9);
+    expect(l.difficulty.score).toBe(54.2);
     const sha = (swing: boolean, comping: boolean) =>
       createHash('sha1').update(lickToMidi(l, { bpm: 120, swing, comping, comp: 'rootless', drums: false })).digest('hex');
-    expect(sha(false, false)).toBe('686f3e2d79228dce8265f7832833c6d9c91876d8');
-    expect(sha(false, true)).toBe('c41290c8d488b1a43e3f4ebcde739eed57866b90');
-    expect(sha(true, false)).toBe('e603f5b90893496b35b6f1de9e22e86ec360351e');
-    expect(sha(true, true)).toBe('373031c9f7cd477dab0db2520f1491b77ebe95e1');
+    expect(sha(false, false)).toBe('5a7909f85cb9b1d6142367db3a2a724037319719');
+    expect(sha(false, true)).toBe('c451d29661551e806c5c74ac33b745bfbfb9821f');
+    expect(sha(true, false)).toBe('a461df524d1d8b7b1119f6b802ac9bcc26ec6549');
+    expect(sha(true, true)).toBe('8d1dace65891bb2bd7ce6dfcc589423d5b7b3644');
   });
 });

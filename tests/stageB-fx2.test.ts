@@ -39,8 +39,8 @@ describe('secondary dominant spelling agrees with its label (bug review #2)', ()
     expect(at('E♭'.replace('♭', 'b'), 71)).toBe('C♭'); // b13 of E♭7 (was B, seed 5078)
     expect(at('E♭'.replace('♭', 'b'), 59)).toBe('C♭');
     expect(at('Eb', 64)).toBe('F♭'); // b9 of E♭7 (was E, seed 5114)
-    // without the secondary-dominant context the chromatic note still follows the line
-    expect(formatSpelling(spellNote(70, { root: sp('A'), quality: 'dom7', direction: 'up' }))).toBe('A♯');
+    // any dominant writes its b9 / b13 on the 9th / 13th letter now (the bar-wide sharp propagation made D♯ / A♯ over D7 in G)
+    expect(formatSpelling(spellNote(70, { root: sp('A'), quality: 'dom7', direction: 'up' }))).toBe('B♭');
   });
 
   it('sweep: every b9 / b13 over a secondary dominant is spelled the way the Analysis labels it (all keys, instruments, tiers)', () => {
@@ -85,12 +85,15 @@ describe('spelling readability (jazz review #8)', () => {
   });
 
   it('a half-step lower neighbour is the letter below its target (F→F♯ is E♯, E♭→E is D♯, C→C♯ is B♯)', () => {
-    // key B: C♯m7 F♯7 Bmaj7; F rises to F♯ over Bmaj7
-    expect(spelled(mkLick('major-251', 11, [null, null, null, null, null, null, null, null, 65, 66, 71, 66]))[8]).toBe('E♯');
-    // key A: Amaj7: E♭ rising to E is D♯ and C rising to C♯ is B♯
+    // E♯ under F♯ only in keys with 6 or more accidentals; in B (5 sharps) and plainer keys it stays the white key F
+    const lo = { root: sp('B'), quality: 'm7' as const, direction: 'up' as const, lowerNeighbourOf: sp('F#') };
+    expect(formatSpelling(spellNote(65, { ...lo, keyAccidentals: 6 }))).toBe('E♯');
+    expect(formatSpelling(spellNote(65, { ...lo, keyAccidentals: 5 }))).toBe('F');
+    expect(spelled(mkLick('major-251', 11, [null, null, null, null, null, null, null, null, 65, 66, 71, 66]))[8]).toBe('F');
+    // key A: Amaj7: E♭ rising to E is D♯; C rising to C♯ stays the white key C (no B♯ in a plain key)
     const a = spelled(mkLick('major-251', 9, [null, null, null, null, null, null, null, null, 63, 64, 60, 61]));
     expect(a[8]).toBe('D♯');
-    expect(a[10]).toBe('B♯');
+    expect(a[10]).toBe('C');
     // the old rule is untouched for natural targets: B♭→B over C7 (F: B♭ = A♯ rising)
     expect(spelled(mkLick('major-251', 0, [null, null, null, null, null, null, null, null, 69, 71, 72, 67]))[8]).toBe('A');
   });

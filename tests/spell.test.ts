@@ -200,7 +200,9 @@ describe('note spelling', () => {
   });
   it('chromatic notes by direction', () => {
     expect(at('C', 'maj7', 66, 'up')).toBe('F♯4');
-    expect(at('C', 'maj7', 66, 'down')).toBe('G♭4');
+    expect(at('C', 'maj7', 66, 'down')).toBe('F♯4'); // the ♯11 of a major 7th is the 4th's sharp whatever the direction
+    expect(at('C', 'dom7', 66, 'down')).toBe('G♭4'); // ♭5 falling on a dominant
+    expect(at('C', 'dom7', 66, 'up')).toBe('F♯4');
     expect(at('C', 'maj7', 65, 'down')).toBe('F4'); // white keys never get a spurious accidental
     expect(at('D', 'm7', 61, null)).toBe('C♯4'); // the major 7th over a minor 7th is the 7th letter's sharp (was D♭)
     expect(at('G', 'm7', 66, null)).toBe('F♯4');

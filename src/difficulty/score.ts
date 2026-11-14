@@ -152,7 +152,7 @@ export function scoreLick(notes: LickNote[], chords: LickChord[], progression: P
   const syncPerBeat = sync / beats;
 
   // chromaticism and altered tensions relative to the chord each note belongs to (anticipation heads: the arrival chord)
-  const lydian = chords.map((_, i) => progression.slots[i]?.roman === '♭II7' || progression.slots[i]?.roman === '♭VII7');
+  const lydian = chords.map((_, i) => progression.slots[i]?.fn === 'lydianDom');
   const chordOf = (a: Attack): LickChord => chords[a.chord] ?? chords[0];
   let chroma = 0;
   let nct = 0;

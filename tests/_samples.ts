@@ -28,7 +28,18 @@ export interface Sample {
   byTier: Record<Tier, Lick[]>;
 }
 
+/**
+ * The five classic three-chord progressions: the statistical thresholds in the musicality tests (guide-tone arrivals, altered
+ * colour, Lydian dominants, ending degrees...) were calibrated on exactly these, so the default sample stays them. The longer
+ * progressions (turnaround, chain-36251, coltrane) are sampled on their own with `progressions: LONG_PROGRESSION_IDS` and judged
+ * by their own targets in tests/long-progressions.test.ts.
+ */
+export const CORE_PROGRESSION_IDS = ['major-251', 'major-251-alt', 'minor-251', 'tritone-251', 'backdoor-251'];
+export const LONG_PROGRESSION_IDS = PROGRESSIONS.map(p => p.id).filter(id => !CORE_PROGRESSION_IDS.includes(id));
+
 export interface SessionSampleOptions {
+  /** Progression ids to sample (default CORE_PROGRESSION_IDS). */
+  progressions?: string[];
   /** Seeds per progression x length x slider position (default 6). */
   seeds?: number;
   /** Like the app, each lick avoids the cells of the previous 8 licks (a practice session). Default true. */
@@ -47,14 +58,15 @@ export function sessionSample(opts: SessionSampleOptions = {}): Sample {
   const seeds = opts.seeds ?? 6;
   const avoid = opts.avoid ?? true;
   const instIds = opts.insts ?? ['alto', 'guitar'];
-  const key = `${seeds}|${avoid}|${instIds.join(',')}`;
+  const ids = opts.progressions ?? CORE_PROGRESSION_IDS;
+  const key = `${seeds}|${avoid}|${instIds.join(',')}|${ids.join(',')}`;
   const hit = cache.get(key);
   if (hit) return hit;
   const insts = instIds.map(getInstrument);
   const all: Lick[] = [];
   const byTier: Record<Tier, Lick[]> = { 1: [], 2: [], 3: [], 4: [] };
   let seed = 1;
-  for (const p of PROGRESSIONS) {
+  for (const p of PROGRESSIONS.filter(p => ids.includes(p.id))) {
     for (const length of LENGTH_IDS) {
       for (const pos of SLIDER_POSITIONS) {
         for (let s = 0; s < seeds; s++) {

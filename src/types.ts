@@ -81,12 +81,25 @@ export interface Fragment {
 
 /* ---------------- progressions ---------------- */
 
+/**
+ * What a chord does in its progression. Colours the generator's cell choice (generate.ts chordRoles), the difficulty
+ * score's Lydian-dominant detection and the musicality metrics; never used to decide where a lick ends (that is the last slot).
+ *  tonic: I, iii, or a local tonic inside a longer chain (maj7 / m7);
+ *  predominant: ii, iv (the chord that sets up the dominant);
+ *  primaryV: a plain dominant that resolves to the next chord (Mixolydian first);
+ *  secondaryDom: a dominant of a non-tonic chord (VI7 -> ii): Mixolydian with b9 / b13 colour allowed;
+ *  lydianDom: tritone-sub bII7 or backdoor bVII7 (Lydian dominant: #11, no natural 11, no altered tensions);
+ *  altV: a dom7alt dominant (altered scale).
+ */
+export type SlotFn = 'tonic' | 'predominant' | 'primaryV' | 'secondaryDom' | 'lydianDom' | 'altV';
+
 export interface ProgressionSlot {
   /** Root of this chord in semitones above the tonic (ii = 2, V = 7, bII = 1, iv = 5, bVII = 10, I = 0). */
   degree: number;
   quality: ChordQualityId;
   /** Roman numeral label for UI, e.g. "ii", "V7", "bII7". */
   roman: string;
+  fn: SlotFn;
 }
 
 export interface ProgressionDef {
@@ -99,6 +112,12 @@ export interface ProgressionDef {
   minTier: Tier;
   description: string;
   slots: ProgressionSlot[];
+  /**
+   * Beats per slot for each length (one entry per slot; every length must sum to whole bars, i.e. a multiple of 4,
+   * and no slot may be shorter than 2 beats). Default: LENGTHS in theory/progressions.ts, which only fits three slots.
+   * The last slot holds the lick's ending, so it should be at least 4 beats.
+   */
+  rhythm?: Record<LengthId, number[]>;
 }
 
 /* ---------------- a generated lick ---------------- */

@@ -3,7 +3,7 @@ import { generateLick } from '../src/generator';
 import { INSTRUMENTS, concertRange, getInstrument } from '../src/instruments';
 import { isValidLick } from '../src/storage';
 import { analyzeLick } from '../src/theory/analyze';
-import { LENGTHS, PROGRESSIONS } from '../src/theory/progressions';
+import { LENGTHS, PROGRESSIONS, getProgression } from '../src/theory/progressions';
 import { decodeLick, encodeLick, parseShareHash, shareUrl } from '../src/share';
 import { isTupletDur } from '../src/theory/rhythm';
 import type { LengthId, Lick, Tier } from '../src/types';
@@ -53,6 +53,37 @@ describe('share codes', () => {
     expect(maxLen.long).toBeLessThan(400);
     expect(maxLen.short).toBeLessThan(200);
   }, 60000);
+
+  it('the longer progressions sit at share indexes 5, 6 and 7 and round-trip at every length, key and tier', () => {
+    const ids = ['turnaround', 'chain-36251', 'coltrane'];
+    ids.forEach((id, k) => {
+      expect(PROGRESSIONS.findIndex(p => p.id === id), id).toBe(5 + k);
+      for (const length of lengths) for (const tier of [1, 2, 3, 4] as Tier[]) for (const keyPc of [0, 3, 6, 11]) {
+        const l = generateLick({ progressionId: id, length, keyPc, tier, range, seed: keyPc * 13 + tier });
+        const code = roundTrip(l);
+        const b0 = atob(code.replace(/-/g, '+').replace(/_/g, '/'));
+        expect(b0.charCodeAt(1) >> 4, `${id} progression nibble`).toBe(5 + k);
+        expect(b0.charCodeAt(1) & 15).toBe(keyPc);
+        expect(decodeLick(code)!.chords.length).toBe(getProgression(id).slots.length);
+        expect(parseShareHash(`#l=${code}`).kind).toBe('lick');
+      }
+    });
+    // a link cut short or padded for the new, longer licks is refused
+    const l = generateLick({ progressionId: 'coltrane', length: 'long', keyPc: 2, tier: 3, range, seed: 4 });
+    const code = encodeLick(l);
+    expect(decodeLick(code.slice(0, -4))).toBeNull();
+    expect(decodeLick(code + 'AAAA')).toBeNull();
+  });
+
+  it('links of the five original progressions still decode to the same licks (the registry only grew)', () => {
+    for (const id of ['major-251', 'major-251-alt', 'minor-251', 'tritone-251', 'backdoor-251']) {
+      const l = generateLick({ progressionId: id, length: 'short', keyPc: 9, tier: 2, range, seed: 21 });
+      const d = decodeLick(encodeLick(l))!;
+      expect(d.progressionId).toBe(id);
+      expect(d.notes).toEqual(l.notes);
+      expect(d.totalTicks).toBe(l.totalTicks);
+    }
+  });
 
   it('decoded id is stable, and shareUrl/parseShareHash agree', () => {
     const l = generateLick({ progressionId: 'major-251', length: 'standard', keyPc: 3, tier: 3, range, seed: 5 });
